@@ -5,7 +5,10 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+
+- Embedded the attributed Codex color icon in the x64 Windows launcher and
+  added a Windows-native build check for the icon resource and ICO size table.
 
 ## [0.2.0] - 2026-08-27
 

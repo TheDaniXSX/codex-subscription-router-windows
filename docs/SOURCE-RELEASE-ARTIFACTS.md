@@ -4,6 +4,11 @@ Public releases are built from Git objects and contain no installed Codex file,
 patched ASAR, composite application, account state, credential, certificate, or
 private diagnostic. The release tools do not read the installed Codex package.
 
+The source tree includes the attributed MIT-licensed Codex color icon, its ICO
+rendering, and the x64 COFF resource consumed by the Go linker. These are
+launcher build inputs only; the archive still contains no OpenAI executable or
+patched application payload.
+
 ## Build and verify
 
 From a clean checkout of the release commit and an empty output directory:
