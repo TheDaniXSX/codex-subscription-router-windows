@@ -21,6 +21,7 @@ jobs:
     name: Security release gates
     permissions:
       contents: read
+      pull-requests: read
       security-events: write
     uses: ./.github/workflows/security.yml
 
