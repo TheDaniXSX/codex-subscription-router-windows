@@ -17,6 +17,17 @@ x64-specific, matching the current Windows compatibility baseline. Maintainers
 can regenerate it from `windows_resources.rc` with GNU `windres` targeting
 `pe-x86-64`.
 
+The visible Electron window belongs to `ChatGPT.real.exe`, not the supervisor
+launcher. While that child is running, the launcher owns the extracted icon
+handles and applies them to the child's top-level windows with bounded Win32
+messages. It also assigns the explicit AppUserModelID
+`com.openai.codex.subscription-router`, matching the Start Menu shortcut made
+by the installer. Windows can therefore combine the pinned launcher and the
+running Electron window into one taskbar group. A small, bounded number of
+startup passes covers late Electron branding and newly created windows without
+continuous window-message traffic. None of this changes the preserved official
+executable.
+
 The required UTF-8 sidecar at
 `resources\codex-router\launcher-config.json` is strict, versioned, and contains
 no credentials:

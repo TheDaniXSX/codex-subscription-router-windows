@@ -72,12 +72,21 @@ func main() {
 		command.Stdin = os.Stdin
 		command.Stdout = os.Stdout
 		command.Stderr = os.Stderr
-		if err := command.Run(); err != nil {
+		if err := command.Start(); err != nil {
+			return fmt.Errorf("start %s: %w", plan.RealApp, err)
+		}
+		stopBrandingSync, brandingErr := startWindowBrandingSync(command.Process.Pid, executable)
+		if brandingErr != nil {
+			fmt.Fprintf(os.Stderr, "Codex Subscription Router launcher: window branding warning: %v\n", brandingErr)
+		}
+		err := command.Wait()
+		stopBrandingSync()
+		if err != nil {
 			var exitError *exec.ExitError
 			if errors.As(err, &exitError) {
 				return exitError
 			}
-			return fmt.Errorf("start %s: %w", plan.RealApp, err)
+			return fmt.Errorf("wait for %s: %w", plan.RealApp, err)
 		}
 		return nil
 	})

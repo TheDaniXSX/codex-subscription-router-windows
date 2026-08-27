@@ -127,6 +127,8 @@ $script:InstallMutex = $null
 $script:InstallMutexAcquired = $false
 $script:ControlPortReservation = $null
 Import-Module (Join-Path $PSScriptRoot 'WindowsLifecycle.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'ShortcutIdentity.psm1') -Force
+$script:RouterAppUserModelId = 'com.openai.codex.subscription-router'
 
 function Write-Step {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -757,19 +759,33 @@ function Install-StartMenuShortcut {
         [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) | Out-Null
         [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null
 
+        Set-CsrShortcutAppUserModelId -Path $temporaryShortcut -AppUserModelId $script:RouterAppUserModelId
+
         if (-not (Test-Path -LiteralPath $temporaryShortcut -PathType Leaf)) {
             throw 'WScript.Shell did not create the temporary shortcut.'
         }
         $validationShell = New-Object -ComObject WScript.Shell
-        $validationShortcut = $validationShell.CreateShortcut($temporaryShortcut)
-        if (-not [IO.Path]::GetFullPath($validationShortcut.TargetPath).Equals(
-            [IO.Path]::GetFullPath($LauncherPath),
-            [StringComparison]::OrdinalIgnoreCase
-        )) {
-            throw 'The temporary shortcut target does not match the verified router launcher.'
+        try {
+            $validationShortcut = $validationShell.CreateShortcut($temporaryShortcut)
+            try {
+                if (-not [IO.Path]::GetFullPath($validationShortcut.TargetPath).Equals(
+                    [IO.Path]::GetFullPath($LauncherPath),
+                    [StringComparison]::OrdinalIgnoreCase
+                )) {
+                    throw 'The temporary shortcut target does not match the verified router launcher.'
+                }
+                $shortcutAppUserModelId = Get-CsrShortcutAppUserModelId -Path $temporaryShortcut
+                if (-not $shortcutAppUserModelId.Equals($script:RouterAppUserModelId, [StringComparison]::Ordinal)) {
+                    throw 'The temporary shortcut AppUserModelID does not match the router window identity.'
+                }
+            }
+            finally {
+                [Runtime.InteropServices.Marshal]::FinalReleaseComObject($validationShortcut) | Out-Null
+            }
         }
-        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($validationShortcut) | Out-Null
-        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($validationShell) | Out-Null
+        finally {
+            [Runtime.InteropServices.Marshal]::FinalReleaseComObject($validationShell) | Out-Null
+        }
 
         if (Test-Path -LiteralPath $shortcutPath -PathType Leaf) {
             # File.Replace publishes the new shortcut and creates its rollback

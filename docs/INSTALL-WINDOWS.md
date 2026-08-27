@@ -177,6 +177,14 @@ El acceso directo se crea de forma atómica en:
 %APPDATA%\Microsoft\Windows\Start Menu\Programs\Codex Subscription Router.lnk
 ```
 
+El acceso directo incluye el AppUserModelID independiente
+`com.openai.codex.subscription-router`, que coincide con el asignado por el
+launcher a la ventana Electron. Esto permite que el icono fijado y la ventana
+abierta compartan un unico grupo de la barra de tareas. Si se habia fijado una
+version anterior del acceso directo, hay que desfijarla una vez y volver a
+fijar el acceso directo actualizado del menu Inicio para renovar esa copia de
+Windows.
+
 La cuenta primaria sigue usando `CODEX_HOME` o, por defecto,
 `%USERPROFILE%\.codex`. El launcher no cambia `CODEX_HOME` ni
 `CODEX_SQLITE_HOME`; únicamente aísla el perfil del escritorio y la raíz del
