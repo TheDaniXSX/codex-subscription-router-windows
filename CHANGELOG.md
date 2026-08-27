@@ -9,6 +9,10 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 - Embedded the attributed Codex color icon in the x64 Windows launcher and
   added a Windows-native build check for the icon resource and ICO size table.
+- Kept the visible Electron child windows synchronized with the launcher icon
+  and explicit AppUserModelID, and assigned the matching identity to newly
+  installed Start Menu shortcuts. The pinned launcher and running window can
+  now share one taskbar group without modifying the preserved official binary.
 
 ## [0.2.0] - 2026-08-27
 
