@@ -1,4 +1,4 @@
-name: Release
+name: Windows Preview Source Release
 
 on:
   push:
@@ -6,47 +6,166 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  cross-platform-gates:
+    name: Cross-platform release gates
+    uses: ./.github/workflows/ci.yml
+
+  windows-gates:
+    name: Windows release gates
+    uses: ./.github/workflows/windows.yml
+
+  security-gates:
+    name: Security release gates
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/security.yml
+
   source-release:
-    runs-on: macos-latest
+    name: Build and attest source-only Windows preview
+    needs:
+      - cross-platform-gates
+      - security-gates
+      - windows-gates
+    runs-on: ubuntu-latest
     environment: release
-    timeout-minutes: 15
+    timeout-minutes: 20
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    env:
+      NPM_CONFIG_FUND: "false"
+      NPM_CONFIG_IGNORE_SCRIPTS: "true"
+
     steps:
-      - name: Check out tagged source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Check out the complete tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.12"
+
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
 
-      - name: Set up Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          node-version: "22.12"
-          package-manager-cache: false
+          python-version: "3.13"
 
-      - name: Verify tag and metadata
+      - name: Install locked JavaScript tooling
+        run: npm ci --ignore-scripts
+
+      - name: Verify tag, version, and release metadata
         shell: bash
         run: |
           version="$(tr -d '[:space:]' < VERSION)"
-          test "${GITHUB_REF_NAME}" = "v${version}"
-          npm run release:check
+          test "$GITHUB_REF_NAME" = "v${version}"
+          tag_ref="refs/tags/$GITHUB_REF_NAME"
+          test "$(git cat-file -t "$tag_ref")" = "tag"
+          test "$(git rev-list -n 1 "$tag_ref")" = "$GITHUB_SHA"
 
-      - name: Run checks
-        run: npm run check
+          if git cat-file tag "$tag_ref" | grep -Eq \
+            -- '-----BEGIN (PGP|SSH) SIGNATURE-----'; then
+            if git verify-tag "$tag_ref"; then
+              echo 'Annotated preview tag signature verified.'
+            else
+              echo '::warning::The annotated preview tag is signed, but its signer is not trusted by this runner.'
+            fi
+          else
+            echo '::notice::Unsigned annotated tags are permitted for Windows previews only.'
+          fi
+          npm run release:gate
 
-      - name: Create source-only GitHub release
+      - name: Create commit-bound automated-gate evidence
+        env:
+          SOURCE_GATES_PATH: ${{ runner.temp }}/source-gates.json
+        run: >-
+          python scripts/release/create_source_gate_evidence.py
+          --output "$SOURCE_GATES_PATH"
+
+      - name: Build deterministic source-only release evidence
+        env:
+          SOURCE_GATES_PATH: ${{ runner.temp }}/source-gates.json
+        run: >-
+          python scripts/release/build_source_release.py
+          --source-gates "$SOURCE_GATES_PATH"
+          --output-dir artifacts/source-release
+
+      - name: Verify source archive, SBOMs, gates, provenance, and checksums
+        run: python scripts/release/verify_source_release.py --input-dir artifacts/source-release
+
+      - name: Confirm the release asset allowlist
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          stem="codex-subscription-router-windows-v${version}"
+          archive="${stem}.tar.gz"
+          expected="$archive
+          $stem.cdx.json
+          $stem.provenance.json
+          $stem.source-gates.json
+          $stem.spdx.json
+          SHA256SUMS"
+          actual="$(find artifacts/source-release -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)"
+          test "$actual" = "$(printf '%s\n' "$expected" | LC_ALL=C sort)"
+
+          if find artifacts/source-release -type f \
+            \( -iname '*.asar' -o -iname '*.exe' -o -iname '*.dll' \
+               -o -iname '*.msix' -o -iname '*.appx' -o -iname '*.pfx' \
+               -o -iname 'auth.json' \) -print -quit | grep -q .; then
+            echo 'Forbidden binary, package, signing key, or credential found in release assets.' >&2
+            exit 1
+          fi
+
+      - name: Attest source-release provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: artifacts/source-release/*
+
+      - name: Preserve verified source-release evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: source-release-${{ github.ref_name }}
+          path: artifacts/source-release/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create source-only Windows preview draft
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "${GITHUB_REF_NAME}"
-          --generate-notes
-          --draft
-          --title "${GITHUB_REF_NAME}"
-          --verify-tag
+        run: |
+          notes_file="$RUNNER_TEMP/windows-preview-notes.md"
+          cat > "$notes_file" <<'EOF'
+          ## Windows preview
+
+          This is a source-only Windows preview. It contains project source,
+          dependency SBOMs, checksums, automated-gate evidence, and provenance.
+          It does not contain OpenAI application files or patched binaries.
+
+          This preview is not a stable release. Manual Windows E2E qualification
+          and publisher signing remain required before stable distribution.
+          Preview tags must be annotated but may be unsigned; a stable release
+          requires a signature that can be verified against the publisher policy.
+          EOF
+
+          gh release create "$GITHUB_REF_NAME" \
+            artifacts/source-release/* \
+            --draft \
+            --latest=false \
+            --notes-file "$notes_file" \
+            --prerelease \
+            --title "Windows preview $GITHUB_REF_NAME" \
+            --verify-tag

@@ -1,0 +1,242 @@
+name: Windows CI
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+    tags:
+      - "v*.*.*"
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint-test-build:
+    name: Lint, test, build, and package (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GOFLAGS: -mod=readonly
+      GOTOOLCHAIN: local
+      NPM_CONFIG_FUND: "false"
+      NPM_CONFIG_IGNORE_SCRIPTS: "true"
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.12"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install locked JavaScript tooling
+        run: npm ci --ignore-scripts
+
+      - name: Check Go formatting
+        run: |
+          $goFiles = @(git ls-files -- "*.go")
+          if ($goFiles.Count -eq 0) {
+            throw "No tracked Go files were found."
+          }
+
+          $unformatted = @(& gofmt -l $goFiles)
+          if ($unformatted.Count -ne 0) {
+            $unformatted | ForEach-Object { Write-Error "gofmt required: $_" }
+            throw "Go formatting check failed."
+          }
+
+      - name: Vet Go packages
+        run: go vet ./...
+
+      - name: Check JavaScript syntax
+        run: npm run check:js
+
+      - name: Run JavaScript tests
+        run: npm run test:js
+
+      - name: Check Python syntax
+        run: |
+          $pythonFiles = @(git ls-files -- "*.py")
+          if ($pythonFiles.Count -ne 0) {
+            & python -m py_compile @pythonFiles
+            if ($LASTEXITCODE -ne 0) {
+              throw "Python syntax check failed with exit code $LASTEXITCODE."
+            }
+          }
+
+      - name: Check PowerShell syntax
+        run: |
+          $syntaxErrors = @()
+          $powershellFiles = @(git ls-files -- "*.ps1" "*.psm1" "*.psd1")
+          foreach ($file in $powershellFiles) {
+            $tokens = $null
+            $parseErrors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $file),
+              [ref]$tokens,
+              [ref]$parseErrors
+            )
+            foreach ($parseError in $parseErrors) {
+              $syntaxErrors += "${file}:$($parseError.Extent.StartLineNumber): $($parseError.Message)"
+            }
+          }
+
+          if ($syntaxErrors.Count -ne 0) {
+            $syntaxErrors | ForEach-Object { Write-Error $_ }
+            throw "PowerShell syntax check failed."
+          }
+
+      - name: Lint PowerShell
+        run: |
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Repository PSGallery -Scope CurrentUser -Force
+          Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Force
+
+          $findings = @()
+          $powershellFiles = @(git ls-files -- "*.ps1" "*.psm1" "*.psd1")
+          foreach ($file in $powershellFiles) {
+            $findings += @(Invoke-ScriptAnalyzer -Path $file -Severity Error)
+          }
+
+          if ($findings.Count -ne 0) {
+            $findings | Format-Table -AutoSize | Out-String | Write-Host
+            throw "PSScriptAnalyzer reported $($findings.Count) error(s)."
+          }
+
+      - name: Run Go tests with the race detector
+        run: |
+          $compiler = Get-Command gcc -ErrorAction Stop
+          Write-Host "Race detector C compiler: $($compiler.Source)"
+          go test -race -count=1 ./...
+
+      - name: Install pinned Go vulnerability scanner
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          $goBin = Join-Path (go env GOPATH) 'bin'
+          $goBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Scan Windows Go packages for known vulnerabilities
+        run: |
+          $scanner = Join-Path (go env GOPATH) 'bin\govulncheck.exe'
+          & $scanner ./...
+          if ($LASTEXITCODE -ne 0) {
+            throw "govulncheck failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Run Windows Python tests
+        run: npm run test:python:windows
+
+      - name: Audit npm dependency vulnerabilities
+        run: npm audit --audit-level=moderate
+
+      - name: Verify repository contains no official binaries or local secrets
+        run: |
+          & pwsh -NoProfile -NonInteractive -File scripts/verify_windows_build.ps1 -RepositoryOnly
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows repository verification failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Build router binaries from source
+        run: |
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+
+          go build -trimpath -buildvcs=false -o artifacts/codex-mux.exe ./cmd/codex-mux
+          if ($LASTEXITCODE -ne 0) {
+            throw "Multiplexer build failed with exit code $LASTEXITCODE."
+          }
+
+          go build -trimpath -buildvcs=false `
+            -ldflags "-s -w -H=windowsgui" `
+            -o artifacts/ChatGPT.exe ./cmd/windows-launcher
+          if ($LASTEXITCODE -ne 0) {
+            throw "Go launcher build failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Validate Windows packaging metadata
+        run: |
+          & pwsh -NoProfile -NonInteractive -File packaging/windows/Test-Packaging.ps1
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows packaging tests failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Build a synthetic MSIX with the Windows SDK
+        run: |
+          $sdkAssets = Join-Path $env:RUNNER_TEMP 'router-sdk-assets'
+          New-Item -ItemType Directory -Path $sdkAssets -Force | Out-Null
+          $onePixelPng = [Convert]::FromBase64String(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+          )
+          foreach ($name in @('icon.png', 'Square44x44Logo.png', 'Square150x150Logo.png')) {
+            [IO.File]::WriteAllBytes((Join-Path $sdkAssets $name), $onePixelPng)
+          }
+
+          $result = & ./packaging/windows/Test-Packaging.ps1 -SdkValidationAssetsPath $sdkAssets
+          if ($LASTEXITCODE -ne 0 -or -not $result.SdkPackageValidated) {
+            throw 'Synthetic Windows SDK MSIX validation did not complete.'
+          }
+
+      - name: Run offline Windows smoke tests
+        run: |
+          & pwsh -NoProfile -NonInteractive -File tests/windows/Invoke-WindowsSmokeTests.ps1 -Mode Offline
+          if ($LASTEXITCODE -ne 0) {
+            throw "Offline Windows smoke tests failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Run synthetic Windows automated release gates
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP 'WINDOWS-AUTOMATED-GATES-RESULT.md'
+          & ./tests/windows/release-gates/Invoke-WindowsAutomatedReleaseGates.ps1 `
+            -RepositoryRoot $env:GITHUB_WORKSPACE `
+            -ReportPath $report
+          if ($LASTEXITCODE -ne 0) {
+            throw "Synthetic Windows automated release gates failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Preserve automated Windows gate report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-automated-gates-${{ github.run_id }}
+          path: ${{ runner.temp }}/WINDOWS-AUTOMATED-GATES-RESULT.md
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Confirm no official application payload entered the workspace
+        if: always()
+        run: |
+          $forbidden = @(
+            Get-ChildItem -LiteralPath . -Recurse -Force -File |
+              Where-Object {
+                $_.FullName -notlike "*\node_modules\*" -and
+                ($_.Extension -in '.asar', '.msix', '.msixbundle', '.appx', '.appxbundle')
+              }
+          )
+          if ($forbidden.Count -ne 0) {
+            $forbidden.FullName | ForEach-Object { Write-Error "Forbidden package artifact: $_" }
+            throw "The CI workspace contains a forbidden application package artifact."
+          }

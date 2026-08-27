@@ -1,52 +1,174 @@
-name: CI
+name: Cross-platform CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "codex/**"
+    tags:
+      - "v*.*.*"
   pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+concurrency:
+  group: portable-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
+env:
+  GOFLAGS: -mod=readonly
+  GOTOOLCHAIN: local
+  NPM_CONFIG_FUND: "false"
+  NPM_CONFIG_IGNORE_SCRIPTS: "true"
+
 jobs:
-  checks:
-    runs-on: macos-latest
-    timeout-minutes: 15
+  portable-tests:
+    name: Portable tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            race: true
+          - os: macos-latest
+            race: true
+          - os: windows-latest
+            race: false
+
     steps:
       - name: Check out source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22.12"
-          package-manager-cache: false
 
-      - name: Test Go packages
-        run: go test ./...
+      - name: Install locked JavaScript tooling
+        run: npm ci --ignore-scripts
 
-      - name: Vet Go packages
-        run: go vet ./...
+      - name: Run Go tests with the race detector
+        if: matrix.race
+        run: go test -race -count=1 ./...
+
+      - name: Run Go tests
+        if: ${{ !matrix.race }}
+        run: go test -count=1 ./...
 
       - name: Check JavaScript syntax
         run: npm run check:js
 
+      - name: Run JavaScript tests
+        run: npm run test:js
+
+      - name: Build the portable multiplexer
+        run: go build -trimpath -buildvcs=false ./cmd/codex-mux
+
+  quality-and-supply-chain:
+    name: Quality, vulnerabilities, and licenses
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.12"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install locked JavaScript tooling
+        run: npm ci --ignore-scripts
+
+      - name: Check Go formatting
+        shell: bash
+        run: |
+          mapfile -t unformatted < <(gofmt -l $(git ls-files -- '*.go'))
+          if (( ${#unformatted[@]} != 0 )); then
+            printf 'gofmt required: %s\n' "${unformatted[@]}" >&2
+            exit 1
+          fi
+
+      - name: Vet Go packages
+        run: go vet ./...
+
       - name: Check Python syntax
-        run: npm run check:python
-
-      - name: Check native launcher syntax
-        run: xcrun clang -fsyntax-only -Wall -Wextra native/launcher.c
-
-      - name: Check installer syntax
-        run: npm run check:shell
+        run: python -m py_compile scripts/*.py scripts/release/*.py
 
       - name: Check release metadata
         run: npm run release:check
+
+      - name: Audit npm dependency vulnerabilities
+        run: npm audit --audit-level=moderate
+
+      - name: Install pinned Go supply-chain scanners
+        shell: bash
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          go install github.com/google/go-licenses/v2@v2.0.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Scan Go dependencies for known vulnerabilities
+        run: govulncheck ./...
+
+      - name: Enforce Go dependency license policy
+        shell: bash
+        run: |
+          go-licenses check --include_tests ./cmd/codex-mux
+          GOOS=windows go-licenses check --include_tests ./cmd/windows-launcher
+
+      - name: Enforce npm dependency license policy
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          allowed = {
+              "0BSD",
+              "Apache-2.0",
+              "BSD-2-Clause",
+              "BSD-3-Clause",
+              "BlueOak-1.0.0",
+              "ISC",
+              "MIT",
+          }
+          lock = json.loads(Path("package-lock.json").read_text(encoding="utf-8"))
+          rejected = []
+          for path, package in sorted(lock.get("packages", {}).items()):
+              if not path:
+                  continue
+              license_name = package.get("license")
+              if license_name not in allowed:
+                  rejected.append(f"{path}: {license_name or 'UNKNOWN'}")
+          if rejected:
+              raise SystemExit("npm license policy rejected:\n" + "\n".join(rejected))
+          print(f"npm license policy accepted {len(lock.get('packages', {})) - 1} packages")
+          PY

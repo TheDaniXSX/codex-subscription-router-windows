@@ -1,8 +1,15 @@
 package mux
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/state"
 )
 
 func TestAggregateProfileStatsMergesActivity(t *testing.T) {
@@ -51,5 +58,31 @@ func TestAggregateProfileStatsMergesActivity(t *testing.T) {
 	}
 	if len(got.DailyUsageBuckets) != 3 || got.CumulativeDailyUsageBuckets[2].Tokens != 100 {
 		t.Fatalf("daily activity was not merged: %#v", got.DailyUsageBuckets)
+	}
+}
+
+func TestFetchWhamProfileRejectsTrailingJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"profile":{},"stats":{},"metadata":{}} {}`))
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(home, "auth.json"),
+		[]byte(`{"tokens":{"access_token":"secret-token","account_id":"account-123"}}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	_, err := fetchWhamProfile(
+		context.Background(),
+		server.Client(),
+		server.URL,
+		state.Account{CodexHome: home},
+	)
+	if err == nil {
+		t.Fatal("fetchWhamProfile() unexpectedly accepted trailing JSON")
 	}
 }

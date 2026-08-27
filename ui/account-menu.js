@@ -1,6 +1,129 @@
 const CODEX_MUX_API = "http://127.0.0.1:__CODEX_MUX_CONTROL_PORT__/v1";
 const CODEX_MUX_TOKEN = "__CODEX_MUX_CONTROL_TOKEN__";
 let codexMuxLoginActive = false;
+let codexMuxPendingLogin = null;
+
+const CODEX_MUX_ACCOUNT_LABEL_MAX_LENGTH = 80;
+const CODEX_MUX_ACCOUNT_STATUSES = new Set([
+  "ready",
+  "pending",
+  "disconnected",
+  "disabled",
+  "restarting",
+  "error",
+]);
+
+function codexMuxAccountStatus(account, pendingAccountId = null) {
+  let status = CODEX_MUX_ACCOUNT_STATUSES.has(account?.status)
+    ? account.status
+    : null;
+  if (!account?.enabled) status = "disabled";
+  else if (pendingAccountId === account?.id) status = "pending";
+  else if (!status && account?.connected) status = "ready";
+  else if (!status && account?.error) status = "error";
+  else if (!status) status = "disconnected";
+
+  const descriptions = {
+    ready: "Connected",
+    pending: "Sign-in pending",
+    disconnected: "Disconnected",
+    disabled: "Disabled",
+    restarting: "Reconnecting…",
+    error: "Connection error",
+  };
+  return {
+    key: status,
+    label: descriptions[status],
+    canLogin: status === "disconnected" || status === "error",
+    canCancelLogin: status === "pending",
+    canLogout: status === "ready",
+    canToggle: status !== "pending" && status !== "restarting",
+  };
+}
+
+function codexMuxPendingLoginSettled(account) {
+  if (!account) return true;
+  const status = codexMuxAccountStatus(account, null).key;
+  return status !== "pending" && status !== "restarting";
+}
+
+function codexMuxValidateAccountLabel(value) {
+  const label = typeof value === "string" ? value.trim() : "";
+  if (!label) throw new Error("Subscription name cannot be empty.");
+  if (label.length > CODEX_MUX_ACCOUNT_LABEL_MAX_LENGTH) {
+    throw new Error(
+      `Subscription name must be ${CODEX_MUX_ACCOUNT_LABEL_MAX_LENGTH} characters or fewer.`,
+    );
+  }
+  return label;
+}
+
+function codexMuxAccountPath(accountId, suffix = "") {
+  return `/accounts/${encodeURIComponent(accountId)}${suffix}`;
+}
+
+function codexMuxRememberPendingLogin(login) {
+  codexMuxPendingLogin = login || null;
+  codexMuxLoginActive = codexMuxPendingLogin != null;
+  return codexMuxPendingLogin;
+}
+
+async function codexMuxPatchAccount(accountId, patch) {
+  return codexMuxRequest(codexMuxAccountPath(accountId), {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+async function codexMuxStartAccountLogin(accountId) {
+  if (codexMuxPendingLogin) {
+    throw new Error(
+      "Finish or cancel the current subscription sign-in before starting another.",
+    );
+  }
+  const result = await codexMuxRequest(
+    codexMuxAccountPath(accountId, "/login"),
+    {
+      method: "POST",
+      body: JSON.stringify({ mode: "chatgptDeviceCode" }),
+    },
+  );
+  if (
+    !result.login ||
+    typeof result.login.loginId !== "string" ||
+    result.login.loginId.trim() === ""
+  ) {
+    throw new Error("The sign-in service returned no login identifier.");
+  }
+  return codexMuxRememberPendingLogin({ ...result.login, accountId });
+}
+
+async function codexMuxCancelAccountLogin(accountId) {
+  const result = await codexMuxRequest(
+    codexMuxAccountPath(accountId, "/login/cancel"),
+    { method: "POST", body: "{}" },
+  );
+  if (codexMuxPendingLogin?.accountId === accountId) {
+    codexMuxRememberPendingLogin(null);
+  }
+  return result;
+}
+
+async function codexMuxLogoutAccount(accountId) {
+  return codexMuxRequest(codexMuxAccountPath(accountId, "/logout"), {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+async function codexMuxDeleteAccount(account) {
+  if (!account || account.controller || account.id === "primary") {
+    throw new Error("The primary subscription cannot be removed.");
+  }
+  return codexMuxRequest(codexMuxAccountPath(account.id), {
+    method: "DELETE",
+  });
+}
 
 function CodexMuxProfileMenuOpenChange(setOpen) {
   return (nextOpen) => {
@@ -21,6 +144,197 @@ async function codexMuxRequest(path, options = {}) {
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
   return body;
+}
+
+const CODEX_MUX_SSE_MIN_RETRY_MS = 1_000;
+const CODEX_MUX_SSE_MAX_RETRY_MS = 30_000;
+const CODEX_MUX_SSE_MAX_EVENT_BYTES = 256 * 1024;
+const CODEX_MUX_UTF8_ENCODER = new TextEncoder();
+
+function codexMuxUtf8ByteLength(value) {
+  return CODEX_MUX_UTF8_ENCODER.encode(value).byteLength;
+}
+
+function codexMuxSubscribeEvents({ apiBase, token, onMessage }) {
+  const controller = new AbortController();
+  let stopped = false;
+  let reconnectTimer = null;
+  let reconnectDelay = CODEX_MUX_SSE_MIN_RETRY_MS;
+
+  const waitToReconnect = () =>
+    new Promise((resolve) => {
+      if (stopped) {
+        resolve(false);
+        return;
+      }
+      const finish = (shouldReconnect) => {
+        if (reconnectTimer !== null) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        controller.signal.removeEventListener("abort", aborted);
+        resolve(shouldReconnect);
+      };
+      const aborted = () => finish(false);
+      controller.signal.addEventListener("abort", aborted, { once: true });
+      reconnectTimer = setTimeout(() => finish(!stopped), reconnectDelay);
+    });
+
+  const run = async () => {
+    while (!stopped) {
+      try {
+        const response = await fetch(`${apiBase}/events`, {
+          method: "GET",
+          headers: {
+            Accept: "text/event-stream",
+            "X-Codex-Mux-Token": token,
+          },
+          cache: "no-store",
+          credentials: "omit",
+          signal: controller.signal,
+        });
+        if (response.status === 204) return;
+        if (!response.ok) {
+          throw new Error(`Event stream failed (${response.status})`);
+        }
+        const contentType = response.headers.get("Content-Type") || "";
+        if (!contentType.toLowerCase().startsWith("text/event-stream")) {
+          throw new Error("Event stream returned an invalid content type");
+        }
+        if (!response.body || typeof response.body.getReader !== "function") {
+          throw new Error("Event stream response is not readable");
+        }
+        reconnectDelay = CODEX_MUX_SSE_MIN_RETRY_MS;
+        await codexMuxReadEventStream(
+          response.body,
+          onMessage,
+          controller.signal,
+          (retryMilliseconds) => {
+            reconnectDelay = Math.min(
+              CODEX_MUX_SSE_MAX_RETRY_MS,
+              Math.max(CODEX_MUX_SSE_MIN_RETRY_MS, retryMilliseconds),
+            );
+          },
+        );
+      } catch (streamError) {
+        if (stopped || streamError?.name === "AbortError") return;
+        reconnectDelay = Math.min(
+          CODEX_MUX_SSE_MAX_RETRY_MS,
+          reconnectDelay * 2,
+        );
+      }
+      if (!(await waitToReconnect())) return;
+    }
+  };
+
+  void run();
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    controller.abort();
+  };
+}
+
+async function codexMuxReadEventStream(body, onMessage, signal, onRetry) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let firstChunk = true;
+  let dataLines = [];
+  let eventDataBytes = 0;
+  let eventType = "";
+  let lastEventId = "";
+  const cancelReader = () => {
+    try {
+      Promise.resolve(reader.cancel?.()).catch(() => {});
+    } catch {}
+  };
+  if (signal.aborted) cancelReader();
+  else signal.addEventListener("abort", cancelReader, { once: true });
+
+  const dispatch = () => {
+    if (dataLines.length > 0 && (eventType === "" || eventType === "message")) {
+      try {
+        onMessage({
+          data: dataLines.join("\n"),
+          lastEventId,
+          type: eventType || "message",
+        });
+      } catch {}
+    }
+    dataLines = [];
+    eventDataBytes = 0;
+    eventType = "";
+  };
+
+  const processLine = (line) => {
+    if (line === "") {
+      dispatch();
+      return;
+    }
+    if (line.startsWith(":")) return;
+    const separator = line.indexOf(":");
+    const field = separator === -1 ? line : line.slice(0, separator);
+    let value = separator === -1 ? "" : line.slice(separator + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    switch (field) {
+      case "data":
+        eventDataBytes += codexMuxUtf8ByteLength(value);
+        if (dataLines.length > 0) eventDataBytes += 1;
+        if (eventDataBytes > CODEX_MUX_SSE_MAX_EVENT_BYTES) {
+          throw new Error("Event stream message is too large");
+        }
+        dataLines.push(value);
+        break;
+      case "event":
+        eventType = value;
+        break;
+      case "id":
+        if (!value.includes("\0")) lastEventId = value;
+        break;
+      case "retry":
+        if (/^\d+$/.test(value)) onRetry(Number(value));
+        break;
+    }
+  };
+
+  const consumeCompleteLines = (atEnd = false) => {
+    let offset = 0;
+    for (let index = 0; index < buffer.length; index += 1) {
+      const character = buffer[index];
+      if (character !== "\r" && character !== "\n") continue;
+      if (character === "\r" && index + 1 === buffer.length && !atEnd) break;
+      processLine(buffer.slice(offset, index));
+      if (character === "\r" && buffer[index + 1] === "\n") index += 1;
+      offset = index + 1;
+    }
+    buffer = buffer.slice(offset);
+  };
+
+  try {
+    while (!signal.aborted) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      if (firstChunk && buffer.length > 0) {
+        firstChunk = false;
+        if (buffer.startsWith("\uFEFF")) buffer = buffer.slice(1);
+      }
+      consumeCompleteLines();
+      if (codexMuxUtf8ByteLength(buffer) > CODEX_MUX_SSE_MAX_EVENT_BYTES) {
+        throw new Error("Event stream line is too large");
+      }
+    }
+    buffer += decoder.decode();
+    consumeCompleteLines(true);
+  } finally {
+    signal.removeEventListener("abort", cancelReader);
+    reader.releaseLock?.();
+  }
 }
 
 const CODEX_MUX_ACCOUNT_SCOPED_PLUGIN_METHODS = new Set([
@@ -169,6 +483,9 @@ function CodexMuxResetAccountSelector({
       (0, e7.jsx)("div", {
         className:
           "flex flex-wrap gap-2 rounded-2xl border border-token-border p-2",
+        role: "group",
+        "aria-label": "Subscription",
+        "data-codex-mux-action": "select-reset-subscription",
         children: loading
           ? (0, e7.jsx)("div", {
               className: "px-2 py-2 text-sm text-token-text-secondary",
@@ -189,6 +506,7 @@ function CodexMuxResetAccountSelector({
                       : "text-token-text-secondary",
                   ].join(" "),
                   "aria-pressed": selected,
+                  "aria-label": `Use ${account.label} for usage resets`,
                   onClick: () => onSelect(account.id),
                   children: [
                     (0, e7.jsx)(CodexMuxAccountAvatar, {
@@ -230,10 +548,14 @@ function CodexMuxAccountMenu() {
   const modalScope = Lo(Q);
   const [accounts, setAccounts] = kXc.useState([]);
   const [loading, setLoading] = kXc.useState(true);
-  const [busy, setBusy] = kXc.useState(false);
+  const [busy, setBusy] = kXc.useState("");
   const [error, setError] = kXc.useState("");
-  const [login, setLogin] = kXc.useState(null);
+  const [statusMessage, setStatusMessage] = kXc.useState("");
+  const [login, setLogin] = kXc.useState(() => codexMuxPendingLogin);
   const [codeCopied, setCodeCopied] = kXc.useState(false);
+  const [selectedAccountId, setSelectedAccountId] = kXc.useState(
+    codexMuxPendingLogin?.accountId || null,
+  );
   const loginAccountId = login?.accountId || null;
 
   const refresh = kXc.useCallback(async () => {
@@ -244,32 +566,56 @@ function CodexMuxAccountMenu() {
         (account) => account.connected && account.enabled,
       );
       setAccounts(nextAccounts);
-      setError("");
-      if (nextAccounts.some((account) => account.connected)) setLoading(false);
+      setSelectedAccountId((current) =>
+        nextAccounts.some((account) => account.id === current)
+          ? current
+          : null,
+      );
+      setLoading(false);
+      return nextAccounts;
     } catch (requestError) {
       setError(requestError.message);
       setLoading(false);
+      return null;
     }
   }, []);
 
+  const clearPendingLogin = kXc.useCallback(() => {
+    codexMuxRememberPendingLogin(null);
+    setLogin(null);
+    setCodeCopied(false);
+  }, []);
+
   kXc.useEffect(() => {
-    refresh();
-    const events = new EventSource(
-      `${CODEX_MUX_API}/events?token=${encodeURIComponent(CODEX_MUX_TOKEN)}`,
-    );
-    events.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data);
-        if (
-          payload.type === "account-updated" &&
-          payload.accountId === loginAccountId
-        ) {
-          codexMuxLoginActive = false;
-          setLogin(null);
-        }
-        if (payload.type === "account-updated") refresh();
-      } catch {}
-    };
+    void refresh();
+    const stopEvents = codexMuxSubscribeEvents({
+      apiBase: CODEX_MUX_API,
+      token: CODEX_MUX_TOKEN,
+      onMessage: (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type !== "account-updated") return;
+          void refresh().then((nextAccounts) => {
+            if (payload.accountId !== loginAccountId) return;
+            if (nextAccounts == null) return;
+            const updated = nextAccounts.find(
+              (account) => account.id === loginAccountId,
+            );
+            if (!codexMuxPendingLoginSettled(updated)) return;
+            const nextStatus = updated
+              ? codexMuxAccountStatus(updated, null).key
+              : "disconnected";
+            clearPendingLogin();
+            if (nextStatus === "ready") {
+              setStatusMessage("Subscription connected.");
+              setError("");
+            } else if (updated?.error) {
+              setError(updated.error);
+            }
+          });
+        } catch {}
+      },
+    });
     const warmupTimer = setTimeout(refresh, 2_000);
     const loadingDeadline = setTimeout(() => {
       refresh().finally(() => setLoading(false));
@@ -279,20 +625,9 @@ function CodexMuxAccountMenu() {
       clearTimeout(warmupTimer);
       clearTimeout(loadingDeadline);
       clearInterval(timer);
-      events.close();
+      stopEvents();
     };
-  }, [refresh, loginAccountId]);
-
-  kXc.useEffect(() => {
-    if (!login) return;
-    const allowEscapeDismissal = (event) => {
-      if (event.key !== "Escape") return;
-      codexMuxLoginActive = false;
-      setLogin(null);
-    };
-    window.addEventListener("keydown", allowEscapeDismissal, true);
-    return () => window.removeEventListener("keydown", allowEscapeDismissal, true);
-  }, [login]);
+  }, [clearPendingLogin, refresh, loginAccountId]);
 
   const connected = accounts.filter(
     (account) => account.connected && account.enabled,
@@ -308,36 +643,151 @@ function CodexMuxAccountMenu() {
     0,
   );
 
-  async function addSubscription(event) {
-    event.preventDefault();
-    if (busy) return;
-    setBusy(true);
+  const selectedAccount =
+    accounts.find((account) => account.id === selectedAccountId) || null;
+  const backendPendingAccount = accounts.find(
+    (account) => account.status === "pending",
+  );
+
+  function keepMenuOpen(event) {
+    event?.preventDefault?.();
+  }
+
+  async function runAccountAction(action, operation, successMessage) {
+    if (busy) return false;
+    setBusy(action);
     setError("");
+    setStatusMessage("");
     try {
-      const created = await codexMuxRequest("/accounts", {
-        method: "POST",
-        body: JSON.stringify({ label: `Subscription ${connected.length + 1}` }),
-      });
-      const result = await codexMuxRequest(`/accounts/${created.account.id}/login`, {
-        method: "POST",
-        body: JSON.stringify({ mode: "chatgptDeviceCode" }),
-      });
-      const pendingLogin = result.login
-        ? { ...result.login, accountId: created.account.id }
-        : null;
-      codexMuxLoginActive = pendingLogin != null;
-      setCodeCopied(false);
-      setLogin(pendingLogin);
+      await operation();
+      if (successMessage) setStatusMessage(successMessage);
       await refresh();
+      return true;
     } catch (requestError) {
-      setError(requestError.message);
+      setError(requestError?.message || "The subscription action failed.");
+      return false;
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   }
 
+  async function addSubscription(event) {
+    keepMenuOpen(event);
+    if (busy) return;
+    if (codexMuxPendingLogin || backendPendingAccount) {
+      setError(
+        "Finish or cancel the current subscription sign-in before adding another.",
+      );
+      return;
+    }
+    await runAccountAction("add", async () => {
+      const created = await codexMuxRequest("/accounts", {
+        method: "POST",
+        body: JSON.stringify({ label: `Subscription ${accounts.length + 1}` }),
+      });
+      setSelectedAccountId(created.account.id);
+      const pendingLogin = await codexMuxStartAccountLogin(created.account.id);
+      setCodeCopied(false);
+      setLogin(pendingLogin);
+      setStatusMessage("Subscription created. Complete sign-in to connect it.");
+    });
+  }
+
+  async function startLogin(account, event) {
+    keepMenuOpen(event);
+    if (backendPendingAccount) {
+      setError(
+        "Finish or cancel the current subscription sign-in before starting another.",
+      );
+      return;
+    }
+    await runAccountAction(`login:${account.id}`, async () => {
+      const pendingLogin = await codexMuxStartAccountLogin(account.id);
+      setLogin(pendingLogin);
+      setSelectedAccountId(account.id);
+      setCodeCopied(false);
+    }, "Sign-in started. Copy the code and continue in your browser.");
+  }
+
+  async function cancelLogin(account, event) {
+    keepMenuOpen(event);
+    const cancelled = await runAccountAction(
+      `cancel:${account.id}`,
+      () => codexMuxCancelAccountLogin(account.id),
+      "Sign-in cancelled. The subscription remains available to retry.",
+    );
+    if (cancelled) clearPendingLogin();
+  }
+
+  async function renameAccount(account, event) {
+    keepMenuOpen(event);
+    const proposed = window.prompt("Subscription name", account.label);
+    if (proposed == null) return;
+    let label;
+    try {
+      label = codexMuxValidateAccountLabel(proposed);
+    } catch (validationError) {
+      setError(validationError.message);
+      return;
+    }
+    await runAccountAction(
+      `rename:${account.id}`,
+      () => codexMuxPatchAccount(account.id, { label }),
+      `Renamed subscription to ${label}.`,
+    );
+  }
+
+  async function toggleAccount(account, event) {
+    keepMenuOpen(event);
+    const enabled = !account.enabled;
+    await runAccountAction(
+      `toggle:${account.id}`,
+      () => codexMuxPatchAccount(account.id, { enabled }),
+      enabled ? "Subscription enabled." : "Subscription disabled.",
+    );
+  }
+
+  async function logoutAccount(account, event) {
+    keepMenuOpen(event);
+    if (
+      !window.confirm(
+        `Sign out of ${account.label}? Existing local conversation assignments will be kept.`,
+      )
+    ) {
+      return;
+    }
+    await runAccountAction(
+      `logout:${account.id}`,
+      () => codexMuxLogoutAccount(account.id),
+      "Subscription signed out.",
+    );
+  }
+
+  async function deleteAccount(account, event) {
+    keepMenuOpen(event);
+    if (account.controller || account.id === "primary") {
+      setError("The primary subscription cannot be removed.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Remove ${account.label}? Its isolated sign-in data and local thread assignments will be deleted from this router.`,
+      )
+    ) {
+      return;
+    }
+    const deleted = await runAccountAction(
+      `delete:${account.id}`,
+      () => codexMuxDeleteAccount(account),
+      "Secondary subscription removed.",
+    );
+    if (!deleted) return;
+    if (loginAccountId === account.id) clearPendingLogin();
+    setSelectedAccountId(null);
+  }
+
   async function copyCodeAndContinue(event) {
-    event.preventDefault();
+    keepMenuOpen(event);
     const userCode = login?.userCode || "";
     const verificationUrl = login?.verificationUrl || login?.authUrl || "";
     const copy = userCode
@@ -390,15 +840,38 @@ function CodexMuxAccountMenu() {
       "codex-mux-total",
     ),
   );
-  if (connected.length > 0) {
+  if (accounts.length > 0) {
     rows.push(
       (0, e7.jsx)(CH.Separator, {}, "codex-mux-accounts-separator"),
     );
   }
 
-  for (const account of connected) {
+  for (const account of accounts) {
+    const state = codexMuxAccountStatus(account, loginAccountId);
     const weekly = codexMuxWeeklyWindow(account.rateLimits);
     const remaining = weekly == null ? null : Math.max(0, 100 - weekly.usedPercent);
+    const identity = account.email
+      ? (0, e7.jsx)(CodexMuxMaskedEmail, { email: account.email })
+      : account.planType || "ChatGPT subscription";
+    const subText = (0, e7.jsxs)("span", {
+      className: "flex min-w-0 flex-col",
+      children: [
+        (0, e7.jsx)("span", {
+          className: "text-token-text-secondary",
+          children: identity,
+        }),
+        (0, e7.jsx)("span", {
+          className:
+            state.key === "error"
+              ? "text-red-500"
+              : "text-token-text-tertiary",
+          children:
+            state.key === "error" && account.error
+              ? `${state.label}: ${account.error}`
+              : state.label,
+        }),
+      ],
+    });
     rows.push(
       (0, e7.jsx)(
         _H,
@@ -409,13 +882,24 @@ function CodexMuxAccountMenu() {
               imageUrl: account.profileImageUrl,
               label: account.label,
             }),
-          SubText: account.email
-            ? (0, e7.jsx)(CodexMuxMaskedEmail, { email: account.email })
-            : account.planType || "ChatGPT subscription",
+          SubText: subText,
           className: "group",
+          "aria-label": `${account.label}, ${state.label}. Manage subscription`,
+          "aria-current": selectedAccountId === account.id ? "true" : undefined,
+          "data-codex-mux-account-id": account.id,
+          "data-codex-mux-state": state.key,
+          onSelect: (event) => {
+            keepMenuOpen(event);
+            setSelectedAccountId((current) =>
+              current === account.id ? null : account.id,
+            );
+          },
           rightIcon: (0, e7.jsx)("span", {
             className: "text-token-description-foreground tabular-nums",
-            children: remaining == null ? "–" : `${Math.round(remaining)}%`,
+            children:
+              state.key === "ready" && remaining != null
+                ? `${Math.round(remaining)}%`
+                : state.label,
           }),
           children: account.planLabel
             ? `${account.label} · ${account.planLabel}`
@@ -424,6 +908,160 @@ function CodexMuxAccountMenu() {
         `codex-mux-account-${account.id}`,
       ),
     );
+  }
+
+  if (selectedAccount) {
+    const selectedState = codexMuxAccountStatus(
+      selectedAccount,
+      loginAccountId,
+    );
+    rows.push(
+      (0, e7.jsx)(CH.Separator, {}, "codex-mux-manage-separator"),
+    );
+    rows.push(
+      (0, e7.jsx)(
+        _H,
+        {
+          LeftIcon: S2,
+          SubText: selectedAccount.label,
+          "aria-label": `Rename ${selectedAccount.label}`,
+          "aria-busy": busy === `rename:${selectedAccount.id}`,
+          "aria-disabled": busy !== "",
+          "data-codex-mux-action": "rename",
+          "data-codex-mux-account-id": selectedAccount.id,
+          onSelect: (event) => renameAccount(selectedAccount, event),
+          children: busy === `rename:${selectedAccount.id}`
+            ? "Renaming…"
+            : "Rename subscription",
+        },
+        `codex-mux-rename-${selectedAccount.id}`,
+      ),
+    );
+    if (selectedState.canLogin) {
+      rows.push(
+        (0, e7.jsx)(
+          _H,
+          {
+            LeftIcon: CodexMuxPlusIcon,
+            SubText:
+              selectedState.key === "error"
+                ? "Retry the ChatGPT device sign-in"
+                : "Connect this ChatGPT subscription",
+            "aria-label": `Sign in to ${selectedAccount.label}`,
+            "aria-busy": busy === `login:${selectedAccount.id}`,
+            "aria-disabled": busy !== "",
+            "data-codex-mux-action": "login",
+            "data-codex-mux-account-id": selectedAccount.id,
+            onSelect: (event) => startLogin(selectedAccount, event),
+            children: busy === `login:${selectedAccount.id}`
+              ? "Starting sign-in…"
+              : selectedState.key === "error"
+                ? "Retry sign-in"
+                : "Sign in",
+          },
+          `codex-mux-sign-in-${selectedAccount.id}`,
+        ),
+      );
+    }
+    if (selectedState.canCancelLogin) {
+      rows.push(
+        (0, e7.jsx)(
+          _H,
+          {
+            LeftIcon: S2,
+            SubText: "Keep the account and stop this sign-in attempt",
+            "aria-label": `Cancel sign-in for ${selectedAccount.label}`,
+            "aria-busy": busy === `cancel:${selectedAccount.id}`,
+            "aria-disabled": busy !== "",
+            "data-codex-mux-action": "cancel-login",
+            "data-codex-mux-account-id": selectedAccount.id,
+            onSelect: (event) => cancelLogin(selectedAccount, event),
+            children: busy === `cancel:${selectedAccount.id}`
+              ? "Cancelling sign-in…"
+              : "Cancel sign-in",
+          },
+          `codex-mux-cancel-${selectedAccount.id}`,
+        ),
+      );
+    }
+    if (selectedState.canLogout) {
+      rows.push(
+        (0, e7.jsx)(
+          _H,
+          {
+            LeftIcon: S2,
+            SubText: "Keep this subscription in the router",
+            "aria-label": `Sign out of ${selectedAccount.label}`,
+            "aria-busy": busy === `logout:${selectedAccount.id}`,
+            "aria-disabled": busy !== "",
+            "data-codex-mux-action": "logout",
+            "data-codex-mux-account-id": selectedAccount.id,
+            onSelect: (event) => logoutAccount(selectedAccount, event),
+            children: busy === `logout:${selectedAccount.id}`
+              ? "Signing out…"
+              : "Sign out",
+          },
+          `codex-mux-logout-${selectedAccount.id}`,
+        ),
+      );
+    }
+    if (
+      selectedState.canToggle &&
+      (!selectedAccount.controller || !selectedAccount.enabled)
+    ) {
+      rows.push(
+        (0, e7.jsx)(
+          _H,
+          {
+            LeftIcon: S2,
+            SubText: selectedAccount.enabled
+              ? "Stop routing new work to this subscription"
+              : "Allow this subscription to reconnect and receive work",
+            "aria-label": `${selectedAccount.enabled ? "Disable" : "Enable"} ${selectedAccount.label}`,
+            "aria-busy": busy === `toggle:${selectedAccount.id}`,
+            "aria-disabled": busy !== "",
+            "data-codex-mux-action": selectedAccount.enabled
+              ? "disable"
+              : "enable",
+            "data-codex-mux-account-id": selectedAccount.id,
+            onSelect: (event) => toggleAccount(selectedAccount, event),
+            children: busy === `toggle:${selectedAccount.id}`
+              ? "Updating…"
+              : selectedAccount.enabled
+                ? "Disable subscription"
+                : "Enable subscription",
+          },
+          `codex-mux-toggle-${selectedAccount.id}`,
+        ),
+      );
+    }
+    if (
+      !selectedAccount.controller &&
+      selectedAccount.id !== "primary" &&
+      selectedState.key !== "pending" &&
+      selectedState.key !== "restarting"
+    ) {
+      rows.push(
+        (0, e7.jsx)(
+          _H,
+          {
+            LeftIcon: S2,
+            SubText: "Permanently remove its isolated local data",
+            tone: "danger",
+            "aria-label": `Remove ${selectedAccount.label}`,
+            "aria-busy": busy === `delete:${selectedAccount.id}`,
+            "aria-disabled": busy !== "",
+            "data-codex-mux-action": "delete",
+            "data-codex-mux-account-id": selectedAccount.id,
+            onSelect: (event) => deleteAccount(selectedAccount, event),
+            children: busy === `delete:${selectedAccount.id}`
+              ? "Removing…"
+              : "Remove subscription",
+          },
+          `codex-mux-delete-${selectedAccount.id}`,
+        ),
+      );
+    }
   }
 
   if (login) {
@@ -438,6 +1076,11 @@ function CodexMuxAccountMenu() {
               : `Code ${login.userCode} · Click to copy`
             : "Finish signing in with ChatGPT",
           onSelect: copyCodeAndContinue,
+          "aria-label": login.userCode
+            ? `Copy sign-in code ${login.userCode} and open ChatGPT`
+            : "Continue subscription sign-in in ChatGPT",
+          "data-codex-mux-action": "continue-login",
+          "data-codex-mux-account-id": login.accountId,
           children: "Continue sign-in",
         },
         "codex-mux-login",
@@ -448,16 +1091,33 @@ function CodexMuxAccountMenu() {
   if (error) {
     rows.push(
       (0, e7.jsx)(
-        _H,
+        "div",
         {
-          LeftIcon: S2,
-          SubText: error,
-          tone: "danger",
-          allowWrap: true,
-          subTextAllowWrap: true,
-          children: "Subscription pool unavailable",
+          role: "alert",
+          "aria-live": "assertive",
+          className:
+            "mx-2 my-1 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-600",
+          "data-codex-mux-state": "error",
+          children: error,
         },
         "codex-mux-error",
+      ),
+    );
+  }
+
+  if (statusMessage) {
+    rows.push(
+      (0, e7.jsx)(
+        "div",
+        {
+          role: "status",
+          "aria-live": "polite",
+          className:
+            "mx-2 my-1 rounded-lg bg-token-foreground/5 px-3 py-2 text-sm text-token-text-secondary",
+          "data-codex-mux-state": "status",
+          children: statusMessage,
+        },
+        "codex-mux-status",
       ),
     );
   }
@@ -469,7 +1129,18 @@ function CodexMuxAccountMenu() {
         {
           LeftIcon: CodexMuxPlusIcon,
           onSelect: addSubscription,
-          children: busy ? "Adding subscription…" : "Add another subscription",
+          "aria-label": "Add another ChatGPT subscription",
+          "aria-busy": busy === "add",
+          "aria-disabled":
+            busy !== "" ||
+            codexMuxPendingLogin != null ||
+            backendPendingAccount != null,
+          "data-codex-mux-action": "add",
+          children: busy === "add"
+            ? "Adding subscription…"
+            : codexMuxPendingLogin || backendPendingAccount
+              ? "Finish current sign-in first"
+              : "Add another subscription",
         },
         "codex-mux-add",
       ),
@@ -795,6 +1466,17 @@ function CodexMuxPluginScope() {
 // Export the same avatar component so both surfaces share image resolution,
 // error handling, and the initials fallback.
 globalThis.CodexMuxAccountAvatar = CodexMuxAccountAvatar;
+globalThis.codexMuxSubscribeEvents = codexMuxSubscribeEvents;
+globalThis.codexMuxUtf8ByteLength = codexMuxUtf8ByteLength;
+globalThis.codexMuxAccountStatus = codexMuxAccountStatus;
+globalThis.codexMuxPendingLoginSettled = codexMuxPendingLoginSettled;
+globalThis.codexMuxValidateAccountLabel = codexMuxValidateAccountLabel;
+globalThis.codexMuxAccountPath = codexMuxAccountPath;
+globalThis.codexMuxPatchAccount = codexMuxPatchAccount;
+globalThis.codexMuxStartAccountLogin = codexMuxStartAccountLogin;
+globalThis.codexMuxCancelAccountLogin = codexMuxCancelAccountLogin;
+globalThis.codexMuxLogoutAccount = codexMuxLogoutAccount;
+globalThis.codexMuxDeleteAccount = codexMuxDeleteAccount;
 globalThis.codexMuxProfileData = codexMuxProfileData;
 globalThis.CodexMuxProfileAvatarStack = (props) =>
   (0, e7.jsx)(CodexMuxProfileAvatarStack, props || {});

@@ -1,0 +1,22 @@
+{
+  "cuaManifest": {
+    "platform": "windows",
+    "arch": "x64",
+    "target": "windows-x64",
+    "node_version": "24.19.0",
+    "node_archive_path": "v24.19.0/node-v24.19.0-win-x64.zip",
+    "runtime_archive_name": "cua-node-test-windows-x64.zip",
+    "runtime_archive_version": "0.0.0/synthetic-test",
+    "node_path": "bin/node.exe",
+    "node_modules": "bin/node_modules",
+    "node_repl_path": "bin/node_repl.exe"
+  },
+  "cuaPackage": {
+    "name": "@oai/cua",
+    "version": "0.0.0-synthetic-test",
+    "type": "module",
+    "main": "dist/lib/js/oai_js_cua/src/index.js"
+  },
+  "helperTransportSource": "const child=spawn(helper,args,{stdio:[\"pipe\",\"pipe\",\"pipe\"],windowsHide:!0}); const home=process.env.CODEX_HOME; child.stdin.write(payload); child.stdout.on(\"data\",onData); child.stderr.on(\"data\",onError); throw new Error(\"computer-use request timed out\");",
+  "nativePipeClientSource": "if(nodeRepl.env.SKY_CUA_NATIVE_PIPE===\"1\"){ const directory=nodeRepl.env.SKY_CUA_NATIVE_PIPE_DIRECTORY; const socket=nodeRepl.nativePipe.createConnection(directory); const args=[\"--parent-pid\",String(process.pid)]; if(outbound>8388608||inbound>67108864) throw new Error(\"Computer Use native pipe frame is too large\"); throw new Error(\"Computer Use native pipe is unavailable\"); }"
+}

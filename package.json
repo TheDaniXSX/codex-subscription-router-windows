@@ -1,29 +1,40 @@
 {
-  "name": "codex-subscription-router-patcher",
+  "name": "codex-subscription-router-windows-patcher",
   "private": true,
-  "version": "0.1.0",
-  "description": "Build tooling for the independent Codex Subscription Router macOS app patch",
+  "version": "0.2.0",
+  "description": "Build tooling for an independent Codex Subscription Router Windows app",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/b-nnett/codex-subscription-router.git"
+    "url": "git+https://github.com/TheDaniXSX/codex-subscription-router-windows.git"
   },
-  "homepage": "https://github.com/b-nnett/codex-subscription-router#readme",
+  "homepage": "https://github.com/TheDaniXSX/codex-subscription-router-windows#readme",
   "bugs": {
-    "url": "https://github.com/b-nnett/codex-subscription-router/issues"
+    "url": "https://github.com/TheDaniXSX/codex-subscription-router-windows/issues"
   },
   "engines": {
     "node": ">=22.12"
   },
   "scripts": {
-    "check": "npm run check:go && npm run check:js && npm run check:python && npm run check:shell",
+    "check": "npm run check:go && npm run check:js && npm run check:python && npm run test:release",
     "check:go": "go test ./... && go vet ./...",
-    "check:js": "node --check ui/account-menu.js && node --check ui/thread-subscription.js && node --check ui/ui-test-bridge.cjs",
-    "check:python": "python3 -m py_compile scripts/patch_app.py scripts/check_release.py",
-    "check:shell": "bash -n install.sh",
-    "release:check": "python3 scripts/check_release.py"
+    "check:js": "node --check ui/account-menu.js && node --check ui/thread-subscription.js && node --check ui/ui-test-bridge.cjs && node --check chrome-extension/service-worker.js && node --check chrome-extension/popup.js",
+    "test:js": "node --test ui/*.test.cjs",
+    "check:python": "python3 -m py_compile scripts/patch_app.py scripts/check_release.py scripts/release/*.py",
+    "check:python:windows": "python -m compileall -q scripts/release && python -m py_compile scripts/patch_app.py scripts/patch_windows_app.py scripts/check_release.py",
+    "test:python:windows": "python -m unittest discover -s tests/windows -p \"test_*.py\" -v",
+    "smoke:windows": "pwsh -NoProfile -NonInteractive -File tests/windows/Invoke-WindowsSmokeTests.ps1 -Mode Offline",
+    "verify:windows": "pwsh -NoProfile -NonInteractive -File scripts/verify_windows_build.ps1 -RepositoryOnly",
+    "verify:chrome": "pwsh -NoProfile -NonInteractive -File scripts/verify_chrome_connector.ps1 -RepositoryOnly",
+    "check:windows": "npm run check:go && npm run check:js && npm run test:js && npm run check:python:windows && npm run test:python:windows && npm run test:release && npm run verify:windows && npm run verify:chrome",
+    "release:check": "python scripts/check_release.py",
+    "release:gate": "python scripts/check_release.py --release-gate",
+    "release:automated-evidence": "python scripts/release/create_source_gate_evidence.py --output artifacts/source-gates.json",
+    "release:source": "python scripts/release/build_source_release.py --source-gates artifacts/source-gates.json --output-dir artifacts/source-release",
+    "release:source:verify": "python scripts/release/verify_source_release.py --input-dir artifacts/source-release",
+    "test:release": "python -m unittest discover -s tests/release -p \"test_*.py\" -v"
   },
   "devDependencies": {
-    "@electron/asar": "4.2.1"
+    "@electron/asar": "4.3.0"
   }
 }

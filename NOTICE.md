@@ -1,7 +1,7 @@
 # Notices
 
 This repository contains original patching and multiplexing source. It does not
-include and must not be used to redistribute the official ChatGPT application,
+include and must not be used to redistribute the official Codex desktop application,
 its ASAR archive, embedded native services, or other OpenAI binaries.
 
 ChatGPT, Codex, OpenAI, and related names and marks belong to OpenAI. Their use

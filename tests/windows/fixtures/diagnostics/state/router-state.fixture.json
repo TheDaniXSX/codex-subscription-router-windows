@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "id": "primary",
+      "label": "Private controller label",
+      "codexHome": "C:\\Users\\example\\.codex",
+      "enabled": true,
+      "controller": true,
+      "createdAt": 1
+    },
+    {
+      "id": "private-secondary-id",
+      "label": "Private company label",
+      "codexHome": "C:\\Users\\example\\router\\accounts\\private-secondary-id",
+      "enabled": false,
+      "controller": false,
+      "createdAt": 2
+    }
+  ],
+  "threadOwner": {
+    "private-thread-a": "primary",
+    "private-thread-b": "primary",
+    "private-thread-c": "private-secondary-id"
+  }
+}

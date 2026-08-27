@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 
-	"github.com/b-nnett/codex-subscription-router/internal/state"
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/state"
 )
 
 var errNoSubscriptionCapacity = errors.New("no enabled ChatGPT subscription has capacity")
@@ -39,6 +41,7 @@ type AccountSnapshot struct {
 	Enabled         bool            `json:"enabled"`
 	Controller      bool            `json:"controller"`
 	Connected       bool            `json:"connected"`
+	Status          string          `json:"status"`
 	Email           string          `json:"email,omitempty"`
 	PlanType        string          `json:"planType,omitempty"`
 	PlanLabel       string          `json:"planLabel,omitempty"`
@@ -67,26 +70,56 @@ func (m *Multiplexer) Accounts(ctx context.Context) []AccountSnapshot {
 
 func (m *Multiplexer) accountSnapshots(ctx context.Context, includeProfile bool) []AccountSnapshot {
 	accounts := m.store.Accounts()
-	results := make(chan AccountSnapshot, len(accounts))
-	for _, account := range accounts {
-		go func(account state.Account) {
-			snapshot, err := m.accountSnapshotWithProfile(ctx, account.ID, includeProfile)
-			if err != nil {
-				snapshot = AccountSnapshot{
-					ID: account.ID, Label: account.Label, Enabled: account.Enabled,
-					Controller: account.Controller, CreatedAt: account.CreatedAt, Error: err.Error(),
+	type indexedSnapshot struct {
+		index    int
+		snapshot AccountSnapshot
+	}
+	jobs := make(chan int)
+	results := make(chan indexedSnapshot, len(accounts))
+	workerCount := min(maximumConcurrentChildren, len(accounts))
+	var workers sync.WaitGroup
+	for worker := 0; worker < workerCount; worker++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				account := accounts[index]
+				snapshot, err := m.accountSnapshotWithProfile(ctx, account.ID, includeProfile)
+				if err != nil {
+					runtime := m.runtimeState(account.ID)
+					snapshot = AccountSnapshot{
+						ID: account.ID, Label: account.Label, Enabled: account.Enabled,
+						Controller: account.Controller, CreatedAt: account.CreatedAt,
+						Status: runtime.status, Error: err.Error(),
+					}
 				}
+				results <- indexedSnapshot{index: index, snapshot: snapshot}
 			}
-			results <- snapshot
-		}(account)
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for index := range accounts {
+			select {
+			case jobs <- index:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+	ordered := make([]*AccountSnapshot, len(accounts))
+	for result := range results {
+		snapshot := result.snapshot
+		ordered[result.index] = &snapshot
 	}
 	snapshots := make([]AccountSnapshot, 0, len(accounts))
-	for range accounts {
-		select {
-		case snapshot := <-results:
-			snapshots = append(snapshots, snapshot)
-		case <-ctx.Done():
-			return snapshots
+	for _, snapshot := range ordered {
+		if snapshot != nil {
+			snapshots = append(snapshots, *snapshot)
 		}
 	}
 	sort.SliceStable(snapshots, func(i, j int) bool {
@@ -103,17 +136,93 @@ func (m *Multiplexer) AddAccount(ctx context.Context, label string) (AccountSnap
 	if err != nil {
 		return AccountSnapshot{}, err
 	}
+	m.setRuntime(account.ID, accountRuntime{status: "pending"})
 	if _, err := m.startChild(ctx, account); err != nil {
-		return AccountSnapshot{}, err
+		disabled := false
+		_, rollbackErr := m.store.UpdateAccount(account.ID, nil, &disabled)
+		m.setRuntimeFailure(account.ID, "error", err)
+		if rollbackErr != nil {
+			return AccountSnapshot{}, fmt.Errorf("start account: %v; disable failed account: %w", err, rollbackErr)
+		}
+		account.Enabled = false
+		return AccountSnapshot{
+			ID: account.ID, Label: account.Label, Enabled: false, Status: "error",
+			CreatedAt: account.CreatedAt, Error: err.Error(),
+		}, nil
 	}
 	return m.accountSnapshot(ctx, account.ID)
 }
 
 func (m *Multiplexer) UpdateAccount(ctx context.Context, id string, label *string, enabled *bool) (AccountSnapshot, error) {
-	if _, err := m.store.UpdateAccount(id, label, enabled); err != nil {
+	operation := m.childOperationLock(id)
+	operation.Lock()
+	defer operation.Unlock()
+	previous, exists := m.store.Account(id)
+	if !exists {
+		return AccountSnapshot{}, fmt.Errorf("account %q not found", id)
+	}
+	if enabled != nil && !*enabled && previous.Controller {
+		return AccountSnapshot{}, errors.New("the primary controller account cannot be disabled")
+	}
+	updated, err := m.store.UpdateAccount(id, label, enabled)
+	if err != nil {
 		return AccountSnapshot{}, err
 	}
+	if enabled != nil {
+		if !*enabled {
+			if err := m.stopChildLocked(id, "disabled"); err != nil {
+				return AccountSnapshot{}, fmt.Errorf("stop disabled account: %w", err)
+			}
+		} else {
+			m.setRuntime(id, accountRuntime{status: "pending"})
+			if _, err := m.startChildLocked(ctx, updated); err != nil {
+				rollbackEnabled := previous.Enabled
+				_, rollbackErr := m.store.UpdateAccount(id, nil, &rollbackEnabled)
+				m.setRuntimeFailure(id, "error", err)
+				if rollbackErr != nil {
+					return AccountSnapshot{}, fmt.Errorf("start enabled account: %v; rollback: %w", err, rollbackErr)
+				}
+				return AccountSnapshot{}, fmt.Errorf("start enabled account: %w", err)
+			}
+		}
+	}
 	return m.accountSnapshot(ctx, id)
+}
+
+func (m *Multiplexer) DeleteAccount(ctx context.Context, id string) error {
+	operation := m.childOperationLock(id)
+	operation.Lock()
+	defer operation.Unlock()
+	account, ok := m.store.Account(id)
+	if !ok {
+		return fmt.Errorf("account %q not found", id)
+	}
+	if account.Controller || account.ID == "primary" {
+		return errors.New("the primary controller account cannot be deleted")
+	}
+	if err := m.stopChildLocked(id, "disabled"); err != nil {
+		if account.Enabled {
+			disabled := false
+			_, _ = m.store.UpdateAccount(id, nil, &disabled)
+		}
+		m.setRuntimeFailure(id, "error", err)
+		return fmt.Errorf("stop account before deletion: %w", err)
+	}
+	if err := m.store.RemoveAccount(id); err != nil {
+		_, stillExists := m.store.Account(id)
+		if stillExists && account.Enabled {
+			_, _ = m.startChildLocked(ctx, account)
+		} else if !stillExists {
+			m.runtimeMu.Lock()
+			delete(m.runtime, id)
+			m.runtimeMu.Unlock()
+		}
+		return err
+	}
+	m.runtimeMu.Lock()
+	delete(m.runtime, id)
+	m.runtimeMu.Unlock()
+	return nil
 }
 
 func (m *Multiplexer) ThreadAccount(ctx context.Context, threadID string) (AccountSnapshot, error) {
@@ -128,24 +237,129 @@ func (m *Multiplexer) StartLogin(ctx context.Context, id, mode string) (json.Raw
 	if mode != "chatgpt" && mode != "chatgptDeviceCode" {
 		return nil, errors.New("login mode must be chatgpt or chatgptDeviceCode")
 	}
+	operation := m.childOperationLock(id)
+	operation.Lock()
+	defer operation.Unlock()
+	const loginStarting = "__starting__"
+	m.runtimeMu.Lock()
+	for accountID, runtime := range m.runtime {
+		if runtime.loginID != "" {
+			m.runtimeMu.Unlock()
+			return nil, fmt.Errorf("a sign-in is already pending for account %q", accountID)
+		}
+	}
+	runtime := m.runtime[id]
+	runtime.status = "pending"
+	runtime.err = ""
+	runtime.loginID = loginStarting
+	runtime.loginCancel = false
+	m.runtime[id] = runtime
+	m.runtimeMu.Unlock()
+	clearReservation := func(err error) {
+		m.updateRuntime(id, func(runtime *accountRuntime) {
+			if runtime.loginID == loginStarting {
+				runtime.loginID = ""
+			}
+			if err != nil {
+				runtime.status = "error"
+				runtime.err = err.Error()
+			}
+		})
+	}
+	account, ok := m.store.Account(id)
+	if !ok {
+		clearReservation(nil)
+		return nil, fmt.Errorf("account %q not found", id)
+	}
+	if !account.Enabled {
+		clearReservation(nil)
+		return nil, fmt.Errorf("account %q is disabled", id)
+	}
 	child, ok := m.child(id)
 	if !ok {
-		return nil, fmt.Errorf("account %q is unavailable", id)
+		var err error
+		child, err = m.startChildLocked(ctx, account)
+		if err != nil {
+			clearReservation(err)
+			return nil, fmt.Errorf("account %q is unavailable: %w", id, err)
+		}
 	}
 	params, _ := json.Marshal(map[string]any{"type": mode})
 	response, err := child.Request(ctx, "account/login/start", params)
 	if err != nil {
+		clearReservation(err)
 		return nil, err
 	}
+	var login struct {
+		LoginID string `json:"loginId"`
+	}
+	if err := json.Unmarshal(response.Result, &login); err != nil || strings.TrimSpace(login.LoginID) == "" {
+		clearReservation(errors.New("app-server returned no loginId"))
+		return nil, errors.New("account/login/start returned no loginId")
+	}
+	m.updateRuntime(id, func(runtime *accountRuntime) {
+		if runtime.loginID == loginStarting {
+			runtime.loginID = login.LoginID
+		}
+	})
 	return response.Result, nil
 }
 
+func (m *Multiplexer) CancelLogin(ctx context.Context, id string) error {
+	operation := m.childOperationLock(id)
+	operation.Lock()
+	defer operation.Unlock()
+	child, ok := m.child(id)
+	if !ok {
+		return fmt.Errorf("account %q is unavailable", id)
+	}
+	loginID := m.runtimeState(id).loginID
+	if loginID == "" {
+		return fmt.Errorf("account %q has no pending sign-in", id)
+	}
+	if loginID == "__starting__" {
+		return fmt.Errorf("account %q sign-in is still starting", id)
+	}
+	m.updateRuntime(id, func(runtime *accountRuntime) {
+		if runtime.loginID == loginID {
+			runtime.loginCancel = true
+		}
+	})
+	params, _ := json.Marshal(map[string]string{"loginId": loginID})
+	if _, err := child.Request(ctx, "account/login/cancel", params); err != nil {
+		m.updateRuntime(id, func(runtime *accountRuntime) {
+			if runtime.loginID == loginID {
+				runtime.loginCancel = false
+			}
+		})
+		return err
+	}
+	m.updateRuntime(id, func(runtime *accountRuntime) {
+		if runtime.loginID == loginID {
+			runtime.loginID = ""
+		}
+		runtime.loginCancel = false
+		runtime.status = "disconnected"
+		runtime.err = ""
+		runtime.failures = 0
+		runtime.circuitUntil = time.Time{}
+	})
+	m.publish(Event{Type: "account-updated", AccountID: id, Message: "Sign-in cancelled"})
+	return nil
+}
+
 func (m *Multiplexer) Logout(ctx context.Context, id string) error {
+	operation := m.childOperationLock(id)
+	operation.Lock()
+	defer operation.Unlock()
 	child, ok := m.child(id)
 	if !ok {
 		return fmt.Errorf("account %q is unavailable", id)
 	}
 	_, err := child.Request(ctx, "account/logout", nil)
+	if err == nil {
+		m.markRuntimeHealthy(id, "disconnected")
+	}
 	return err
 }
 
@@ -158,14 +372,39 @@ func (m *Multiplexer) accountSnapshotWithProfile(ctx context.Context, accountID 
 	if !ok {
 		return AccountSnapshot{}, fmt.Errorf("account %q not found", accountID)
 	}
+	runtime := m.runtimeState(accountID)
+	base := AccountSnapshot{
+		ID: account.ID, Label: account.Label, Enabled: account.Enabled,
+		Controller: account.Controller, CreatedAt: account.CreatedAt,
+		Status: runtime.status, Error: runtime.err,
+		ThreadCount: m.store.ThreadCounts()[account.ID],
+	}
+	if !account.Enabled {
+		if runtime.status == "error" && runtime.err != "" {
+			base.Status = "error"
+		} else {
+			base.Status = "disabled"
+		}
+		base.Error = runtime.err
+		return base, nil
+	}
 	child, ok := m.child(accountID)
 	if !ok {
-		return AccountSnapshot{}, fmt.Errorf("account %q app-server is unavailable", accountID)
+		if base.Status == "" {
+			base.Status = "error"
+		}
+		if base.Error == "" {
+			base.Error = fmt.Sprintf("account %q app-server is unavailable", accountID)
+		}
+		return base, nil
 	}
 	params := json.RawMessage(`{"refreshToken":false}`)
 	accountResponse, err := child.Request(ctx, "account/read", params)
 	if err != nil {
-		return AccountSnapshot{}, err
+		m.setRuntimeFailure(accountID, "error", err)
+		base.Status = "error"
+		base.Error = err.Error()
+		return base, nil
 	}
 	var accountResult struct {
 		Account json.RawMessage `json:"account"`
@@ -178,6 +417,18 @@ func (m *Multiplexer) accountSnapshotWithProfile(ctx context.Context, accountID 
 		Controller: account.Controller, Connected: string(accountResult.Account) != "null" && len(accountResult.Account) > 0,
 		CreatedAt: account.CreatedAt, RawAccount: accountResult.Account,
 		ThreadCount: m.store.ThreadCounts()[account.ID],
+	}
+	if snapshot.Connected {
+		snapshot.Status = "ready"
+		m.markRuntimeHealthy(accountID, "ready")
+	} else if runtime.loginID != "" {
+		snapshot.Status = "pending"
+	} else if runtime.status == "error" && runtime.err != "" {
+		snapshot.Status = "error"
+		snapshot.Error = runtime.err
+	} else {
+		snapshot.Status = "disconnected"
+		m.markRuntimeHealthy(accountID, "disconnected")
 	}
 	if snapshot.Connected {
 		var details struct {

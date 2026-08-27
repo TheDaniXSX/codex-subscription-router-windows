@@ -1,0 +1,29 @@
+{
+  "accounts": [
+    {
+      "id": "private-primary-id",
+      "label": "Private controller label",
+      "enabled": true,
+      "controller": true,
+      "connected": true,
+      "email": "alice@example.invalid",
+      "profileImageUrl": "https://example.invalid/private-photo",
+      "authType": "chatgpt",
+      "planType": "plus",
+      "threadCount": 2,
+      "error": "Authorization: Bearer PRIVATE-ERROR-TOKEN for alice@example.invalid"
+    },
+    {
+      "id": "private-secondary-id",
+      "label": "Private company label",
+      "enabled": true,
+      "controller": false,
+      "connected": false,
+      "email": "bob@example.invalid",
+      "authType": "chatgpt",
+      "planType": "team",
+      "threadCount": 1,
+      "error": "login failed for bob@example.invalid"
+    }
+  ]
+}

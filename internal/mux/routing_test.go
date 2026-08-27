@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/b-nnett/codex-subscription-router/internal/protocol"
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/protocol"
 )
 
 func TestIsUsageLimitResponseRecognizesStructuredError(t *testing.T) {
@@ -26,6 +26,28 @@ func TestIsUsageLimitResponseIgnoresUnrelatedError(t *testing.T) {
 	}}
 	if isUsageLimitResponse(message) {
 		t.Fatal("unrelated error was misclassified as a usage limit")
+	}
+}
+
+func TestIsUsageLimitResponseDoesNotTreatArbitraryQuotaTextAsDepletion(t *testing.T) {
+	message := protocol.Message{Error: &protocol.RPCError{
+		Code:    -32000,
+		Message: "quota configuration file is malformed",
+		Data:    json.RawMessage(`{"quota":{"status":"invalid"}}`),
+	}}
+	if isUsageLimitResponse(message) {
+		t.Fatal("arbitrary quota diagnostics must not trigger subscription failover")
+	}
+}
+
+func TestIsUsageLimitResponseRecognizesNestedStructuredCode(t *testing.T) {
+	message := protocol.Message{Error: &protocol.RPCError{
+		Code:    -32000,
+		Message: "turn failed",
+		Data:    json.RawMessage(`{"error":{"type":"rate_limit_exceeded"}}`),
+	}}
+	if !isUsageLimitResponse(message) {
+		t.Fatal("nested structured rate-limit code was not recognized")
 	}
 }
 

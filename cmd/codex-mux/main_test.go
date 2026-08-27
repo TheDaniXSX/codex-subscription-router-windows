@@ -30,3 +30,20 @@ func TestValidateControlToken(t *testing.T) {
 		}
 	}
 }
+
+func TestParseControlPortRequiresPerInstallationHighPort(t *testing.T) {
+	for _, valid := range []string{"49152", "55001", "65535"} {
+		port, err := parseControlPort(valid)
+		if err != nil {
+			t.Fatalf("parseControlPort(%q) error = %v", valid, err)
+		}
+		if got := port; got < minimumControlPort || got > maximumControlPort {
+			t.Fatalf("parseControlPort(%q) = %d outside allowed range", valid, got)
+		}
+	}
+	for _, invalid := range []string{"", "48123", "49151", "65536", "not-a-port", " 55001"} {
+		if _, err := parseControlPort(invalid); err == nil {
+			t.Fatalf("parseControlPort(%q) unexpectedly succeeded", invalid)
+		}
+	}
+}

@@ -1,0 +1,111 @@
+name: Security
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  pull_request:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: manual
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go from go.mod
+        if: matrix.language == 'go'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Build Go targets for CodeQL
+        if: matrix.language == 'go'
+        shell: pwsh
+        env:
+          GOFLAGS: -mod=readonly
+          GOTOOLCHAIN: local
+        run: go build ./...
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          category: /language:${{ matrix.language }}
+
+  secrets:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan committed history for secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: gitleaks.toml
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          license-check: true
+          deny-licenses: AGPL-1.0-only, AGPL-3.0-only, SSPL-1.0, BUSL-1.1

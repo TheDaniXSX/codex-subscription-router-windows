@@ -1,0 +1,1 @@
+Synthetic temporary diagnostic payload. The doctor may measure but must not modify it.

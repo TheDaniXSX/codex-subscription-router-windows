@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Codex Subscription Router Connector",
+  "version": "0.1.0",
+  "description": "Opt-in browser context connector for Codex Subscription Router on Windows.",
+  "permissions": [
+    "activeTab",
+    "nativeMessaging",
+    "scripting"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_title": "Codex Subscription Router",
+    "default_popup": "popup.html"
+  },
+  "minimum_chrome_version": "120"
+}
