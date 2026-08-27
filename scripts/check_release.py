@@ -65,6 +65,7 @@ REQUIRED_FILES = (
     "scripts/rollback_windows.ps1",
     "scripts/uninstall_windows.ps1",
     "scripts/verify_windows_build.ps1",
+    "scripts/verify_windows_launcher_icon.ps1",
     "scripts/windows/Manage-ShellIntegration.ps1",
     "tests/release/test_source_release.py",
     "tests/windows/Invoke-WindowsSmokeTests.ps1",

@@ -9,9 +9,12 @@ application.
 1. Public releases contain only this project's source, documentation, SBOMs,
    checksums, and (if the project later chooses to publish them) binaries built
    entirely from this repository.
-2. A patched Codex application, `app.asar`, OpenAI executable, DLL, resource,
-   icon, package, or extracted official file is never committed, uploaded to CI,
-   attached to a release, cached remotely, or redistributed.
+2. A patched Codex application, `app.asar`, OpenAI executable, DLL, package,
+   or file extracted from the official installation is never committed,
+   uploaded to CI, attached to a release, cached remotely, or redistributed.
+   The independently sourced MIT-licensed launcher icon under `assets/` is a
+   repository build input, not an extracted OpenAI application file; its
+   attribution and trademark notice must remain intact.
 3. The installed official application is a read-only build input. The patcher
    must never change files in `C:\Program Files\WindowsApps`, the official
    package registration, or the official application's data directory.

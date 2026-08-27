@@ -11,6 +11,12 @@ Build a GUI-subsystem executable without requiring MSVC:
 go build -trimpath -ldflags "-s -w -H=windowsgui" -o ChatGPT.exe ./cmd/windows-launcher
 ```
 
+The package includes `rsrc_windows_amd64.syso`, which embeds the attributed
+Codex color icon from `assets/` into `ChatGPT.exe`. The checked-in resource is
+x64-specific, matching the current Windows compatibility baseline. Maintainers
+can regenerate it from `windows_resources.rc` with GNU `windres` targeting
+`pe-x86-64`.
+
 The required UTF-8 sidecar at
 `resources\codex-router\launcher-config.json` is strict, versioned, and contains
 no credentials:

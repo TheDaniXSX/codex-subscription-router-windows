@@ -177,6 +177,14 @@ jobs:
             throw "Go launcher build failed with exit code $LASTEXITCODE."
           }
 
+          & pwsh -NoProfile -NonInteractive `
+            -File scripts/verify_windows_launcher_icon.ps1 `
+            -LauncherPath artifacts/ChatGPT.exe `
+            -SourceIconPath assets/codex-color.ico
+          if ($LASTEXITCODE -ne 0) {
+            throw "Launcher icon verification failed with exit code $LASTEXITCODE."
+          }
+
       - name: Validate Windows packaging metadata
         run: |
           & pwsh -NoProfile -NonInteractive -File packaging/windows/Test-Packaging.ps1
