@@ -15,16 +15,22 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
+	"sync"
 	"time"
 
-	"github.com/b-nnett/codex-subscription-router/internal/control"
-	"github.com/b-nnett/codex-subscription-router/internal/mux"
-	"github.com/b-nnett/codex-subscription-router/internal/protocol"
-	"github.com/b-nnett/codex-subscription-router/internal/state"
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/control"
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/mux"
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/protocol"
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/securefs"
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/state"
 )
 
-const defaultControlPort = 48123
+const (
+	minimumControlPort = 49152
+	maximumControlPort = 65535
+)
+
+var controlTokenMu sync.Mutex
 
 func main() {
 	if err := run(); err != nil {
@@ -55,12 +61,28 @@ func run() error {
 	if primaryCodexHome == "" {
 		primaryCodexHome = filepath.Join(home, ".codex")
 	}
+	releaseInstance, err := acquireInstanceLock(root)
+	if err != nil {
+		return err
+	}
+	defer releaseInstance()
+
+	port, err := parseControlPort(os.Getenv("CODEX_MUX_CONTROL_PORT"))
+	if err != nil {
+		return err
+	}
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return fmt.Errorf("reserve local control endpoint: %w", err)
+	}
+	defer listener.Close()
+
 	store, err := state.Open(root, primaryCodexHome)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	defer cancel()
 	multiplexer, err := mux.New(mux.Options{
 		RealExecutable: realExecutable,
@@ -81,33 +103,22 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	port := defaultControlPort
-	if value := os.Getenv("CODEX_MUX_CONTROL_PORT"); value != "" {
-		if parsed, parseErr := strconv.Atoi(value); parseErr == nil && parsed > 0 && parsed <= 65535 {
-			port = parsed
+	controlServer := control.New(
+		listener.Addr().String(),
+		token,
+		multiplexer,
+		os.Getenv("CODEX_MUX_UI_TESTS") == "1",
+	)
+	go func() {
+		if serveErr := controlServer.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			fmt.Fprintf(os.Stderr, "codex-mux: control server: %v\n", serveErr)
 		}
-	}
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "codex-mux: account UI unavailable: %v\n", err)
-	} else {
-		controlServer := control.New(
-			listener.Addr().String(),
-			token,
-			multiplexer,
-			os.Getenv("CODEX_MUX_UI_TESTS") == "1",
-		)
-		go func() {
-			if serveErr := controlServer.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-				fmt.Fprintf(os.Stderr, "codex-mux: control server: %v\n", serveErr)
-			}
-		}()
-		defer func() {
-			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer shutdownCancel()
-			_ = controlServer.Shutdown(shutdownCtx)
-		}()
-	}
+	}()
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer shutdownCancel()
+		_ = controlServer.Shutdown(shutdownCtx)
+	}()
 
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64*1024), 64*1024*1024)
@@ -123,6 +134,21 @@ func run() error {
 	return scanner.Err()
 }
 
+func parseControlPort(value string) (int, error) {
+	if value == "" {
+		return 0, errors.New("CODEX_MUX_CONTROL_PORT is required for interactive app-server mode")
+	}
+	port, err := strconv.Atoi(value)
+	if err != nil || port < minimumControlPort || port > maximumControlPort {
+		return 0, fmt.Errorf(
+			"CODEX_MUX_CONTROL_PORT must be a decimal port between %d and %d",
+			minimumControlPort,
+			maximumControlPort,
+		)
+	}
+	return port, nil
+}
+
 func resolveRealExecutable() (string, error) {
 	if configured := os.Getenv("CODEX_MUX_REAL_CODEX"); configured != "" {
 		return configured, nil
@@ -131,7 +157,7 @@ func resolveRealExecutable() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve wrapper executable: %w", err)
 	}
-	realExecutable := filepath.Join(filepath.Dir(executable), "codex.real")
+	realExecutable := filepath.Join(filepath.Dir(executable), realExecutableName())
 	if _, err := os.Stat(realExecutable); err != nil {
 		return "", fmt.Errorf("find bundled codex.real: %w", err)
 	}
@@ -171,17 +197,23 @@ func passthrough(realExecutable string, args []string) error {
 }
 
 func loadOrCreateToken(root string) (string, error) {
+	controlTokenMu.Lock()
+	defer controlTokenMu.Unlock()
 	if configured := os.Getenv("CODEX_MUX_CONTROL_TOKEN"); configured != "" {
 		return validateControlToken(configured)
 	}
 	path := filepath.Join(root, "control-token")
-	if data, err := os.ReadFile(path); err == nil {
+	if _, err := os.Lstat(path); err == nil {
+		if chmodErr := securefs.PrivateFile(path); chmodErr != nil {
+			return "", fmt.Errorf("secure control token: %w", chmodErr)
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return "", fmt.Errorf("read control token: %w", readErr)
+		}
 		token, validateErr := validateControlToken(string(data))
 		if validateErr != nil {
 			return "", fmt.Errorf("read control token: %w", validateErr)
-		}
-		if chmodErr := os.Chmod(path, 0o600); chmodErr != nil {
-			return "", fmt.Errorf("secure control token: %w", chmodErr)
 		}
 		return token, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -192,8 +224,8 @@ func loadOrCreateToken(root string) (string, error) {
 		return "", fmt.Errorf("generate control token: %w", err)
 	}
 	token := hex.EncodeToString(bytes)
-	if err := os.WriteFile(path, []byte(token), 0o600); err != nil {
-		return "", fmt.Errorf("write control token: %w", err)
+	if err := securefs.WritePrivateFileAtomic(path, []byte(token)); err != nil {
+		return "", fmt.Errorf("write private control token: %w", err)
 	}
 	return token, nil
 }

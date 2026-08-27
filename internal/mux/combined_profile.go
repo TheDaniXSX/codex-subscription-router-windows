@@ -1,7 +1,6 @@
 package mux
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,7 +11,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/b-nnett/codex-subscription-router/internal/state"
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/state"
 )
 
 type usageBucket struct {
@@ -118,6 +117,13 @@ func (m *Multiplexer) CombinedProfile(ctx context.Context) (CombinedProfile, err
 		select {
 		case result := <-results:
 			if result.err != nil {
+				if errors.Is(result.err, ErrCredentialsUnavailable) {
+					return CombinedProfile{}, fmt.Errorf(
+						"combined profile unavailable for account %q: %w",
+						result.account.ID,
+						result.err,
+					)
+				}
 				partial = true
 				continue
 			}
@@ -199,8 +205,7 @@ func fetchWhamProfile(ctx context.Context, client *http.Client, endpoint string,
 		return whamProfile{}, fmt.Errorf("fetch combined profile: status %d", response.StatusCode)
 	}
 	var profile whamProfile
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	if err := decoder.Decode(&profile); err != nil {
+	if err := decodeSingleJSON(data, &profile); err != nil {
 		return whamProfile{}, fmt.Errorf("decode combined profile: %w", err)
 	}
 	return profile, nil

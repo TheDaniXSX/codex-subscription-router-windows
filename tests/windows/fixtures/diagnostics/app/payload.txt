@@ -1,0 +1,1 @@
+Synthetic router payload used only to test byte and file-count inventory.

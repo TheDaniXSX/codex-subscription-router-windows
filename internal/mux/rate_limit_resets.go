@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/b-nnett/codex-subscription-router/internal/state"
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/state"
 )
 
 const (

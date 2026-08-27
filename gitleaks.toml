@@ -1,0 +1,4 @@
+title = "Codex Subscription Router secret scanning"
+
+[extend]
+useDefault = true

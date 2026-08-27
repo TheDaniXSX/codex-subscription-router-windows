@@ -1,9 +1,11 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/b-nnett/codex-subscription-router/internal/mux"
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/mux"
 )
 
 type Server struct {
@@ -20,6 +22,8 @@ type Server struct {
 	uiTests bool
 	http    *http.Server
 }
+
+const desktopAppOrigin = "app://-"
 
 func New(address, token string, multiplexer *mux.Multiplexer, uiTests bool) *Server {
 	server := &Server{token: token, mux: multiplexer, uiTests: uiTests}
@@ -64,6 +68,10 @@ func (s *Server) combinedProfile(response http.ResponseWriter, request *http.Req
 		profile, err = s.mux.AccountProfile(ctx, accountID)
 	}
 	if err != nil {
+		if errors.Is(err, mux.ErrCredentialsUnavailable) {
+			writeCredentialsUnavailable(response, err)
+			return
+		}
 		writeJSON(response, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
@@ -200,6 +208,14 @@ func (s *Server) accountAction(response http.ResponseWriter, request *http.Reque
 	ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
 	defer cancel()
 
+	if len(parts) == 1 && request.Method == http.MethodDelete {
+		if err := s.mux.DeleteAccount(ctx, accountID); err != nil {
+			writeJSON(response, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(response, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
 	if len(parts) == 1 && request.Method == http.MethodPatch {
 		var input struct {
 			Label   *string `json:"label"`
@@ -220,6 +236,10 @@ func (s *Server) accountAction(response http.ResponseWriter, request *http.Reque
 	if len(parts) == 2 && parts[1] == "rate-limit-resets" && request.Method == http.MethodGet {
 		result, err := s.mux.RateLimitResetCredits(ctx, accountID)
 		if err != nil {
+			if errors.Is(err, mux.ErrCredentialsUnavailable) {
+				writeCredentialsUnavailable(response, err)
+				return
+			}
 			writeJSON(response, http.StatusBadGateway, map[string]any{"error": err.Error()})
 			return
 		}
@@ -237,10 +257,22 @@ func (s *Server) accountAction(response http.ResponseWriter, request *http.Reque
 		}
 		result, err := s.mux.ConsumeRateLimitResetCredit(ctx, accountID, input.CreditID, input.RedeemRequestID)
 		if err != nil {
+			if errors.Is(err, mux.ErrCredentialsUnavailable) {
+				writeCredentialsUnavailable(response, err)
+				return
+			}
 			writeJSON(response, http.StatusBadGateway, map[string]any{"error": err.Error()})
 			return
 		}
 		writeRawJSON(response, http.StatusOK, result)
+		return
+	}
+	if len(parts) == 3 && parts[1] == "login" && parts[2] == "cancel" && request.Method == http.MethodPost {
+		if err := s.mux.CancelLogin(ctx, accountID); err != nil {
+			writeJSON(response, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(response, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
 	if len(parts) != 2 || request.Method != http.MethodPost {
@@ -315,20 +347,22 @@ func (s *Server) events(response http.ResponseWriter, request *http.Request) {
 
 func (s *Server) authorized(request *http.Request) bool {
 	provided := request.Header.Get("X-Codex-Mux-Token")
-	if provided == "" {
-		provided = request.URL.Query().Get("token")
-	}
 	return len(provided) == len(s.token) && subtle.ConstantTimeCompare([]byte(provided), []byte(s.token)) == 1
 }
 
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Header.Get("Origin") == "app://-" {
-			response.Header().Set("Access-Control-Allow-Origin", "app://-")
+		origin := request.Header.Get("Origin")
+		if origin != "" && origin != desktopAppOrigin {
+			writeJSON(response, http.StatusForbidden, map[string]any{"error": "origin not allowed"})
+			return
+		}
+		if origin == desktopAppOrigin {
+			response.Header().Set("Access-Control-Allow-Origin", desktopAppOrigin)
 			response.Header().Set("Vary", "Origin")
 		}
 		response.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Codex-Mux-Token")
-		response.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+		response.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		response.Header().Set("Cache-Control", "no-store")
 		response.Header().Set("Referrer-Policy", "no-referrer")
 		response.Header().Set("X-Content-Type-Options", "nosniff")
@@ -341,10 +375,25 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 }
 
 func decodeJSON(request *http.Request, target any) error {
-	decoder := json.NewDecoder(io.LimitReader(request.Body, 64*1024))
+	const maximumRequestBytes = 64 * 1024
+	contents, err := io.ReadAll(io.LimitReader(request.Body, maximumRequestBytes+1))
+	if err != nil {
+		return fmt.Errorf("read JSON request: %w", err)
+	}
+	if len(contents) > maximumRequestBytes {
+		return fmt.Errorf("JSON request exceeds %d bytes", maximumRequestBytes)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("invalid JSON: trailing data")
+		}
+		return fmt.Errorf("invalid JSON: trailing data: %w", err)
 	}
 	return nil
 }
@@ -359,6 +408,13 @@ func writeRawJSON(response http.ResponseWriter, status int, value json.RawMessag
 	response.Header().Set("Content-Type", "application/json")
 	response.WriteHeader(status)
 	_, _ = response.Write(value)
+}
+
+func writeCredentialsUnavailable(response http.ResponseWriter, err error) {
+	writeJSON(response, http.StatusConflict, map[string]any{
+		"error":   "credentials_unavailable",
+		"message": err.Error(),
+	})
 }
 
 func methodNotAllowed(response http.ResponseWriter) {

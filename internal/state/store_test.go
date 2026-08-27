@@ -156,7 +156,7 @@ func TestSyncManagedConfigPropagatesPluginsWithoutRestart(t *testing.T) {
 	}
 }
 
-func TestUpdateAccountPreservesController(t *testing.T) {
+func TestUpdateAccountPreservesControllerAndRejectsDisable(t *testing.T) {
 	root := t.TempDir()
 	store, err := Open(root, filepath.Join(root, "primary"))
 	if err != nil {
@@ -164,11 +164,11 @@ func TestUpdateAccountPreservesController(t *testing.T) {
 	}
 	label := "Personal"
 	enabled := false
-	account, err := store.UpdateAccount("primary", &label, &enabled)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := store.UpdateAccount("primary", &label, &enabled); err == nil {
+		t.Fatal("controller disable unexpectedly succeeded")
 	}
-	if account.Label != label || account.Enabled || !account.Controller {
+	account, ok := store.Account("primary")
+	if !ok || account.Label != "Primary" || !account.Enabled || !account.Controller {
 		t.Fatalf("unexpected updated account: %#v", account)
 	}
 }

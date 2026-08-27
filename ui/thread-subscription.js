@@ -31,28 +31,33 @@ function CodexMuxThreadSubscription() {
     };
 
     refresh();
-    const events = new EventSource(
-      `${CODEX_MUX_THREAD_API}/events?token=${encodeURIComponent(CODEX_MUX_THREAD_TOKEN)}`,
-    );
-    events.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data);
-        if (
-          payload.type === "account-updated" ||
-          (payload.type === "thread-failed-over" &&
-            payload.data?.threadId === threadId)
-        ) {
-          refresh();
-        }
-      } catch {}
-    };
+    const subscribeEvents = globalThis.codexMuxSubscribeEvents;
+    const stopEvents =
+      typeof subscribeEvents === "function"
+        ? subscribeEvents({
+            apiBase: CODEX_MUX_THREAD_API,
+            token: CODEX_MUX_THREAD_TOKEN,
+            onMessage: (event) => {
+              try {
+                const payload = JSON.parse(event.data);
+                if (
+                  payload.type === "account-updated" ||
+                  (payload.type === "thread-failed-over" &&
+                    payload.data?.threadId === threadId)
+                ) {
+                  refresh();
+                }
+              } catch {}
+            },
+          })
+        : () => {};
     const warmupTimer = setTimeout(refresh, 2_000);
     const timer = setInterval(refresh, 30_000);
     return () => {
       active = false;
       clearTimeout(warmupTimer);
       clearInterval(timer);
-      events.close();
+      stopEvents();
     };
   }, [threadId]);
 

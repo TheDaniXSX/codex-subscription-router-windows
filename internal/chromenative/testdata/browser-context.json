@@ -1,0 +1,1 @@
+{"protocol":"codex-router-native-v1","id":"context-1","type":"browser.context.publish","payload":{"url":"https://example.com/docs","title":"Example documentation","selection":"selected text","text":"visible page text"}}

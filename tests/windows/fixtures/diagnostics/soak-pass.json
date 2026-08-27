@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "samples": [
+    {
+      "timestampUtc": "2026-01-01T00:00:00Z",
+      "processes": [
+        { "ProcessId": 101, "ExecutablePath": "D:\\Synthetic\\Router\\ChatGPT.exe", "WorkingSetSize": 104857600, "PrivatePageCount": 83886080, "HandleCount": 200 },
+        { "ProcessId": 102, "ExecutablePath": "D:\\Synthetic\\Router\\resources\\codex.exe", "WorkingSetSize": 52428800, "PrivatePageCount": 41943040, "HandleCount": 100 },
+        { "ProcessId": 999, "ExecutablePath": "D:\\Other\\official.exe", "WorkingSetSize": 1073741824, "PrivatePageCount": 1073741824, "HandleCount": 9000 }
+      ]
+    },
+    {
+      "timestampUtc": "2026-01-01T00:05:00Z",
+      "processes": [
+        { "ProcessId": 101, "ExecutablePath": "D:\\Synthetic\\Router\\ChatGPT.exe", "WorkingSetSize": 115343360, "PrivatePageCount": 89128960, "HandleCount": 215 },
+        { "ProcessId": 102, "ExecutablePath": "D:\\Synthetic\\Router\\resources\\codex.exe", "WorkingSetSize": 57671680, "PrivatePageCount": 47185920, "HandleCount": 105 }
+      ]
+    },
+    {
+      "timestampUtc": "2026-01-01T00:10:00Z",
+      "processes": [
+        { "ProcessId": 101, "ExecutablePath": "D:\\Synthetic\\Router\\ChatGPT.exe", "WorkingSetSize": 115343360, "PrivatePageCount": 94371840, "HandleCount": 225 },
+        { "ProcessId": 102, "ExecutablePath": "D:\\Synthetic\\Router\\resources\\codex.exe", "WorkingSetSize": 57671680, "PrivatePageCount": 47185920, "HandleCount": 115 }
+      ]
+    }
+  ]
+}

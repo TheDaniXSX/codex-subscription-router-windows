@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 2,
+  "projectVersion": "9.9.9-test",
+  "sourcePackage": "OpenAI.Codex_fixture",
+  "sourceVersion": "99.1.2.3",
+  "sourceAsarVersion": "99.1.2",
+  "sourceBuild": "fixture-build",
+  "controlPort": 49210,
+  "createdAtUtc": "2026-01-01T00:00:00Z",
+  "destination": "C:\\Users\\example\\private-router-path",
+  "controlTokenPath": "C:\\Users\\example\\control-token",
+  "sourceSignerThumbprint": "DO-NOT-EMIT-THIS-FIELD"
+}

@@ -1,0 +1,41 @@
+{
+  "processes": [
+    {
+      "ProcessId": 101,
+      "ParentProcessId": 100,
+      "Name": "ChatGPT.real.exe",
+      "ExecutablePath": "<APP>\\app\\ChatGPT.real.exe",
+      "WorkingSetSize": 314572800,
+      "HandleCount": 700
+    },
+    {
+      "ProcessId": 102,
+      "ParentProcessId": 101,
+      "Name": "codex.real.exe",
+      "ExecutablePath": "<APP>\\app\\resources\\codex.real.exe",
+      "WorkingSetSize": 104857600,
+      "HandleCount": 200
+    },
+    {
+      "ProcessId": 201,
+      "ParentProcessId": 1,
+      "Name": "ChatGPT.exe",
+      "ExecutablePath": "<OFFICIAL>\\app\\ChatGPT.exe",
+      "WorkingSetSize": 209715200,
+      "HandleCount": 500
+    },
+    {
+      "ProcessId": 301,
+      "ParentProcessId": 1,
+      "Name": "unrelated.exe",
+      "ExecutablePath": "C:\\Unrelated\\unrelated.exe",
+      "WorkingSetSize": 1073741824,
+      "HandleCount": 5000
+    }
+  ],
+  "port": {
+    "port": 49210,
+    "listening": true,
+    "owningProcessId": 101
+  }
+}

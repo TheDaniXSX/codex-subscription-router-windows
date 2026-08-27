@@ -1,0 +1,13 @@
+# Local packaging output and scratch space.
+/artifacts/
+/staging/
+/*.appx
+/*.appxbundle
+/*.msix
+/*.msixbundle
+/*.cer
+/*.pfx
+/*.p12
+/*.key
+/*.pem
+

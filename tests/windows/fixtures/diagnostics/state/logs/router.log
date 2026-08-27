@@ -1,0 +1,5 @@
+INFO startup path=C:\Users\example\private-router-path
+WARN Authorization: Bearer TEST-SECRET-BEARER
+WARN x-codex-mux-token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+WARN contact alice@example.invalid query=https://example.invalid/callback?code=PRIVATE-DEVICE-CODE
+ERROR {"access_token":"test-access-token","password":"test-password"}

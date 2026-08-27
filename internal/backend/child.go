@@ -13,8 +13,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
-	"github.com/b-nnett/codex-subscription-router/internal/protocol"
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/protocol"
 )
 
 type Inbound struct {
@@ -28,6 +29,11 @@ type response struct {
 	err     error
 }
 
+type processSupervisor interface {
+	Terminate() error
+	Close() error
+}
+
 // Child owns one real Codex app-server process and one isolated CODEX_HOME.
 type Child struct {
 	accountID string
@@ -36,21 +42,27 @@ type Child struct {
 	env       []string
 	inbound   chan<- Inbound
 
-	command   *exec.Cmd
-	stdin     io.WriteCloser
-	writeMu   sync.Mutex
-	pendingMu sync.Mutex
-	pending   map[string]chan response
-	sequence  atomic.Uint64
-	closed    chan struct{}
-	closeOnce sync.Once
+	command    *exec.Cmd
+	supervisor processSupervisor
+	stdin      io.WriteCloser
+	writeMu    sync.Mutex
+	pendingMu  sync.Mutex
+	pending    map[string]chan response
+	sequence   atomic.Uint64
+	closing    atomic.Bool
+	closed     chan struct{}
+	closeOnce  sync.Once
+	stopOnce   sync.Once
+	stopErr    error
 }
 
 func Start(accountID, codexHome, executable string, args, baseEnv []string, inbound chan<- Inbound) (*Child, error) {
-	env := withEnvironment(baseEnv, "CODEX_HOME", codexHome)
+	env := withoutRouterEnvironment(baseEnv)
+	env = withEnvironment(env, "CODEX_HOME", codexHome)
 	env = withEnvironment(env, "CODEX_SQLITE_HOME", codexHome)
 	command := exec.Command(executable, args...)
 	command.Env = env
+	prepareCommand(command)
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("open Codex stdin: %w", err)
@@ -75,6 +87,13 @@ func Start(accountID, codexHome, executable string, args, baseEnv []string, inbo
 	if err := command.Start(); err != nil {
 		return nil, fmt.Errorf("start Codex app-server for %s: %w", accountID, err)
 	}
+	supervisor, err := superviseProcess(command.Process)
+	if err != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return nil, fmt.Errorf("supervise Codex app-server for %s: %w", accountID, err)
+	}
+	child.supervisor = supervisor
 	go child.readLoop(stdout)
 	go child.waitLoop()
 	return child, nil
@@ -82,6 +101,13 @@ func Start(accountID, codexHome, executable string, args, baseEnv []string, inbo
 
 func (c *Child) AccountID() string {
 	return c.accountID
+}
+
+// Done is closed when the owned app-server process exits. Callers may use it
+// to remove stale children and schedule a supervised restart. The returned
+// channel is receive-only and remains safe to observe after Close.
+func (c *Child) Done() <-chan struct{} {
+	return c.closed
 }
 
 func (c *Child) Send(message protocol.Message) error {
@@ -93,8 +119,14 @@ func (c *Child) Send(message protocol.Message) error {
 }
 
 func (c *Child) SendRaw(encoded []byte) error {
+	if c.closing.Load() {
+		return errors.New("Codex app-server is closing")
+	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	if c.closing.Load() {
+		return errors.New("Codex app-server is closing")
+	}
 	select {
 	case <-c.closed:
 		return errors.New("Codex app-server is closed")
@@ -140,7 +172,48 @@ func (c *Child) Close() error {
 	if c.command.Process == nil {
 		return nil
 	}
-	return c.command.Process.Signal(os.Interrupt)
+	c.stopOnce.Do(func() {
+		select {
+		case <-c.closed:
+			c.stopErr = c.supervisor.Close()
+			return
+		default:
+		}
+		c.closing.Store(true)
+		// StdinPipe is backed by an *os.File, whose Close may run concurrently
+		// with Write. Do not wait for writeMu here: a hung child can fill the
+		// pipe while a writer owns that mutex.
+		closeErr := c.stdin.Close()
+		if waitForProcess(c.closed, 2*time.Second) {
+			if err := c.supervisor.Close(); err != nil {
+				c.stopErr = err
+			} else {
+				c.stopErr = closeErr
+			}
+			return
+		}
+		if err := c.supervisor.Terminate(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			c.stopErr = err
+			return
+		}
+		if !waitForProcess(c.closed, 2*time.Second) {
+			c.stopErr = errors.New("Codex app-server did not exit after termination")
+			return
+		}
+		c.stopErr = closeErr
+	})
+	return c.stopErr
+}
+
+func waitForProcess(closed <-chan struct{}, timeout time.Duration) bool {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-closed:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 func (c *Child) readLoop(stdout io.Reader) {
@@ -175,6 +248,9 @@ func (c *Child) readLoop(stdout io.Reader) {
 
 func (c *Child) waitLoop() {
 	err := c.command.Wait()
+	if c.supervisor != nil {
+		_ = c.supervisor.Close()
+	}
 	c.closeOnce.Do(func() { close(c.closed) })
 	c.pendingMu.Lock()
 	defer c.pendingMu.Unlock()
@@ -191,12 +267,28 @@ func (c *Child) removePending(key string) {
 }
 
 func withEnvironment(environment []string, key, value string) []string {
-	prefix := key + "="
 	result := make([]string, 0, len(environment)+1)
 	for _, entry := range environment {
-		if !strings.HasPrefix(entry, prefix) {
-			result = append(result, entry)
+		separator := strings.IndexByte(entry, '=')
+		if separator > 0 && environmentKeyEqual(entry[:separator], key) {
+			continue
 		}
+		result = append(result, entry)
 	}
-	return append(result, prefix+value)
+	return append(result, key+"="+value)
+}
+
+func withoutRouterEnvironment(environment []string) []string {
+	result := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		separator := strings.IndexByte(entry, '=')
+		if separator > 0 {
+			key := entry[:separator]
+			if environmentKeyHasPrefix(key, "CODEX_MUX_") || environmentKeyHasPrefix(key, "CODEX_ROUTER_") {
+				continue
+			}
+		}
+		result = append(result, entry)
+	}
+	return result
 }

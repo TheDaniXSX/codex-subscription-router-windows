@@ -1,3 +1,3 @@
-module github.com/b-nnett/codex-subscription-router
+module github.com/TheDaniXSX/codex-subscription-router-windows
 
-go 1.26.0
+go 1.26.7
