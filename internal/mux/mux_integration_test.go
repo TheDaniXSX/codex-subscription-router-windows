@@ -41,6 +41,7 @@ type fakePage struct {
 type fakeAppServerSpec struct {
 	AccountID              string              `json:"accountId"`
 	UsedPercent            float64             `json:"usedPercent"`
+	ShortUsedPercent       *float64            `json:"shortUsedPercent,omitempty"`
 	Disconnected           bool                `json:"disconnected,omitempty"`
 	InitializeError        bool                `json:"initializeError,omitempty"`
 	NoResponseMethods      []string            `json:"noResponseMethods,omitempty"`
@@ -214,10 +215,14 @@ func fakeResponse(spec fakeAppServerSpec, message protocol.Message) *protocol.Me
 			"type": "chatgpt", "email": spec.AccountID + "@example.test", "planType": "plus",
 		}})
 	case "account/rateLimits/read":
+		shortUsed := spec.UsedPercent
+		if spec.ShortUsedPercent != nil {
+			shortUsed = *spec.ShortUsedPercent
+		}
 		shortMinutes, weeklyMinutes := int64(300), int64(10_080)
 		return success(map[string]any{"rateLimits": map[string]any{
 			"primary": map[string]any{
-				"usedPercent": spec.UsedPercent, "windowDurationMins": shortMinutes,
+				"usedPercent": shortUsed, "windowDurationMins": shortMinutes,
 			},
 			"secondary": map[string]any{
 				"usedPercent": spec.UsedPercent, "windowDurationMins": weeklyMinutes,

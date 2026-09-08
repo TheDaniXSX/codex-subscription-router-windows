@@ -31,6 +31,9 @@ the Windows port.
 
 - **Quota-aware routing.** New chats favour weekly allowance that will expire
   sooner, with a bounded boost for accounts holding banked usage resets.
+- **Subscription selector.** Choose Auto or a preferred subscription in the
+  profile menu. The preferred subscription receives new chats while it has
+  capacity; routing falls back automatically when it is unavailable.
 - **Sticky conversations.** Once a thread is assigned, every follow-up returns
   to the same subscription unless that subscription is depleted.
 - **Automatic failover.** A depleted thread continues through another account
@@ -89,9 +92,9 @@ Codex Subscription Router currently targets:
 | Component | Supported value |
 | --- | --- |
 | Platform | Windows 10/11 x64 |
-| Official Store package | `26.820.9563.0` |
-| Inner desktop version/build | `26.820.71523` / `7226` |
-| Bundled Codex CLI | `0.150.0-alpha.8` |
+| Official Store package | `26.901.6511.0` (also supports `26.820.9563.0`) |
+| Current inner desktop version/build | `26.901.51231` / `8109` |
+| Current bundled Codex CLI | `0.153.4` |
 | Go | 1.26 or newer |
 | Node.js | 22.12 or newer |
 | Python | 3.10 or newer |
@@ -176,6 +179,24 @@ starts another sign-in.
 | Account disabled | Excluded from routing and pooled usable quota |
 
 The subscription assigned to the current thread appears in its pinned summary.
+
+### Choose which subscription to use
+
+Open the profile menu, then expand **Routing mode** below **Usage remaining**.
+Choose **Auto** to balance subscriptions, or select a subscription (including
+Primary) to spend its allowance first. The closed selector shows your saved mode.
+
+The choice takes effect for the next new chat and for failover decisions, without
+restarting the app. Existing chats keep their account and context until that
+account runs out of capacity. If the preferred subscription is exhausted or
+temporarily disconnected, other subscriptions can serve new work automatically;
+the preference remains saved and regains priority when it becomes available.
+The total usage summary still represents all enabled subscriptions.
+
+Selection does not enable or disable accounts. Removing or disabling the selected
+subscription returns the mode to Auto. Renaming it preserves the selection.
+The preference survives restarts in a private `routing-mode.json` alongside
+`state.json`; older router versions ignore this separate file during rollback.
 
 ## Profiles, plugins, and resets
 

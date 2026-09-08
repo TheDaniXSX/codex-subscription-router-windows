@@ -261,6 +261,6 @@ test("account menu exposes only actions valid for each lifecycle state", () => {
         .map((row) => row?.props?.["data-codex-mux-action"])
         .filter(Boolean),
     );
-    assert.deepEqual(actions, [...expectedActions, "add"], status);
+    assert.deepEqual(actions, ["routing-mode", ...expectedActions, "add"], status);
   }
 });

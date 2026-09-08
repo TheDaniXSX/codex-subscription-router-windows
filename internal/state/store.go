@@ -42,6 +42,7 @@ type Store struct {
 	primaryCodexHome string
 	accounts         []Account
 	owners           map[string]string
+	routingMode      RoutingMode
 }
 
 func Open(root, primaryCodexHome string) (*Store, error) {
@@ -122,6 +123,9 @@ func Open(root, primaryCodexHome string) (*Store, error) {
 		if err := syncIsolatedConfig(store.primaryCodexHome, account.CodexHome); err != nil {
 			return nil, fmt.Errorf("sync account %q config: %w", account.ID, err)
 		}
+	}
+	if err := store.loadRoutingMode(); err != nil {
+		return nil, fmt.Errorf("read routing mode: %w", err)
 	}
 	return store, nil
 }
@@ -272,6 +276,12 @@ func (s *Store) UpdateAccount(id string, label *string, enabled *bool) (Account,
 			s.accounts[index].Label = trimmed
 		}
 		if enabled != nil {
+			if !*enabled && s.routingMode.AccountID == id {
+				if err := s.saveRoutingModeLocked(RoutingMode{Mode: "auto"}); err != nil {
+					s.accounts[index] = previous
+					return Account{}, err
+				}
+			}
 			s.accounts[index].Enabled = *enabled
 		}
 		if err := s.saveLocked(); err != nil {
@@ -368,6 +378,13 @@ func (s *Store) RemoveAccount(id string) error {
 		return fmt.Errorf("refuse to remove untrusted account home: %w", err)
 	}
 	accountRoot := filepath.Dir(canonicalHome)
+	// Commit Auto first: a crash between the two files cannot leave a dangling
+	// preference. A later deletion failure safely leaves the account enabled.
+	if s.routingMode.AccountID == id {
+		if err := s.saveRoutingModeLocked(RoutingMode{Mode: "auto"}); err != nil {
+			return err
+		}
+	}
 
 	previousAccounts := s.accounts
 	previousOwners := s.owners

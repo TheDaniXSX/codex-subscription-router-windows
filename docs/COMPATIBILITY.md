@@ -7,6 +7,33 @@ publishing a destination if any expectation differs.
 
 ## Release 0.2.0
 
+### Current source checkout (September update)
+
+Additional patch profile: `windows-26.901.6511.0-x64-r1`.
+
+| Component | Reviewed value |
+| --- | --- |
+| Official package | `OpenAI.Codex_26.901.6511.0_x64__2p2nqsd0c76g0` |
+| Internal desktop version/build | `26.901.51231` / `8109` |
+| Bundled CLI | `0.153.4` |
+| Original `app.asar` SHA-256 | `e75bae2b8a02f174c7ceeed6d631aaff355e44f8af5c798fa3628089f11d659e` |
+| Original `codex.exe` SHA-256 | `e5aa76d19c7c94e2e9ef9b707d590206a73ac0e97c8ddc8382181242494bef75` |
+| Original `ChatGPT.exe` SHA-256 | `814e9fbd141cfa2aaefa33220bc3a7170824e18089946bf1947617597353851d` |
+| Computer Use tree SHA-256 | `c2b1cb4ea9e1394bf5c7ae189d3b82d1732c105a680a3762894dc7a08f531ee7` |
+| Computer Use Node/package | `24.19.0` / `0.2.4` |
+
+The production update manifest advertised this package on 2026-09-08.
+Its renderer splits the profile menu into `app-primary` while request and
+reset-query helpers remain in `app-initial`. The dedicated compatibility
+module patches both and preserves account management, profile/plugin/reset
+selection, thread attribution, runtime isolation, and the opt-in Appshots gate.
+
+The original release profile below remains supported. September changes are
+available from source; the historical release qualification is not a claim
+that all native capabilities have been manually requalified on every machine.
+
+### Original August release profile
+
 Patch profile: `windows-26.820.9563.0-x64-r1`
 
 | Component | Locked value |
@@ -33,7 +60,7 @@ verification. Those results do not qualify an arbitrary future commit. Public
 release qualification must be repeated against the exact tagged candidate and
 recorded in [the Windows E2E report](E2E-REPORT-WINDOWS.md).
 
-Only the exact values above are accepted for normal installation. A different
+Only the exact reviewed profiles above are accepted for normal installation. A different
 official package may require no semantic changes, but it is still unverified
 until a separate profile records and reviews its identity, hashes, anchors,
 signatures, and qualification results. Diagnostic overrides must not activate

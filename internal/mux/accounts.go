@@ -55,6 +55,7 @@ type AccountSnapshot struct {
 }
 
 type RouteReason struct {
+	Selection            string   `json:"selection,omitempty"`
 	WeeklyUsedPercent    *float64 `json:"weeklyUsedPercent"`
 	WeeklyResetsAt       *int64   `json:"weeklyResetsAt,omitempty"`
 	ShortUsedPercent     *float64 `json:"shortUsedPercent"`
@@ -154,6 +155,8 @@ func (m *Multiplexer) AddAccount(ctx context.Context, label string) (AccountSnap
 }
 
 func (m *Multiplexer) UpdateAccount(ctx context.Context, id string, label *string, enabled *bool) (AccountSnapshot, error) {
+	previousMode := m.RoutingMode()
+	defer func() { m.publishRoutingModeChange(previousMode) }()
 	operation := m.childOperationLock(id)
 	operation.Lock()
 	defer operation.Unlock()
@@ -190,6 +193,8 @@ func (m *Multiplexer) UpdateAccount(ctx context.Context, id string, label *strin
 }
 
 func (m *Multiplexer) DeleteAccount(ctx context.Context, id string) error {
+	previousMode := m.RoutingMode()
+	defer func() { m.publishRoutingModeChange(previousMode) }()
 	operation := m.childOperationLock(id)
 	operation.Lock()
 	defer operation.Unlock()
@@ -490,6 +495,7 @@ func (m *Multiplexer) chooseAccount(ctx context.Context) (state.Account, RouteRe
 }
 
 func (m *Multiplexer) chooseAccountExcluding(ctx context.Context, excluded map[string]struct{}) (state.Account, RouteReason, error) {
+	mode := m.RoutingMode()
 	snapshots := m.accountSnapshots(ctx, false)
 	type candidate struct {
 		account      state.Account
@@ -509,7 +515,7 @@ func (m *Multiplexer) chooseAccountExcluding(ctx context.Context, excluded map[s
 			continue
 		}
 		account, ok := m.store.Account(snapshot.ID)
-		if !ok {
+		if !ok || !account.Enabled {
 			continue
 		}
 		weekly, short := longestAndShortestWindow(snapshot.RateLimits)
@@ -530,6 +536,15 @@ func (m *Multiplexer) chooseAccountExcluding(ctx context.Context, excluded map[s
 		if short != nil {
 			shortUsed = short.UsedPercent
 			reason.ShortUsedPercent = &short.UsedPercent
+		}
+		if mode.Mode == "account" && mode.AccountID == account.ID && (short == nil || short.UsedPercent < 100) {
+			reason.Selection = "preferred"
+			return account, reason, nil
+		}
+		if mode.Mode == "account" && mode.AccountID == account.ID {
+			// A depleted short window must not select the preferred account again
+			// through the automatic fallback ranking.
+			continue
 		}
 		candidates = append(candidates, candidate{
 			account: account, reason: reason, weekly: weekly,
@@ -595,6 +610,10 @@ collectResetCredits:
 		}
 		return left.account.CreatedAt < right.account.CreatedAt
 	})
+	candidates[0].reason.Selection = "auto"
+	if mode.Mode == "account" {
+		candidates[0].reason.Selection = "preferred-fallback"
+	}
 	return candidates[0].account, candidates[0].reason, nil
 }
 

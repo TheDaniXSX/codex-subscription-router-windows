@@ -556,9 +556,13 @@ function CodexMuxAccountMenu() {
   const [selectedAccountId, setSelectedAccountId] = kXc.useState(
     codexMuxPendingLogin?.accountId || null,
   );
+  const [routingMode, setRoutingMode] = kXc.useState({ mode: "auto" });
+  const [routingModeOpen, setRoutingModeOpen] = kXc.useState(false);
+  const [routingRequestState] = kXc.useState(() => ({ revision: 0, saving: false, refreshPending: false }));
   const loginAccountId = login?.accountId || null;
 
   const refresh = kXc.useCallback(async () => {
+    const routingRevision = routingRequestState.revision;
     try {
       const result = await codexMuxRequest("/accounts");
       const nextAccounts = result.accounts || [];
@@ -566,6 +570,9 @@ function CodexMuxAccountMenu() {
         (account) => account.connected && account.enabled,
       );
       setAccounts(nextAccounts);
+      if (!routingRequestState.saving && routingRevision === routingRequestState.revision) {
+        setRoutingMode(result.routingMode || { mode: "auto" });
+      }
       setSelectedAccountId((current) =>
         nextAccounts.some((account) => account.id === current)
           ? current
@@ -594,6 +601,11 @@ function CodexMuxAccountMenu() {
       onMessage: (event) => {
         try {
           const payload = JSON.parse(event.data);
+          if (payload.type === "routing-mode-updated") {
+            if (routingRequestState.saving) routingRequestState.refreshPending = true;
+            else void refresh();
+            return;
+          }
           if (payload.type !== "account-updated") return;
           void refresh().then((nextAccounts) => {
             if (payload.accountId !== loginAccountId) return;
@@ -651,6 +663,38 @@ function CodexMuxAccountMenu() {
 
   function keepMenuOpen(event) {
     event?.preventDefault?.();
+  }
+
+  async function selectRoutingMode(nextMode, event) {
+    keepMenuOpen(event);
+    if (busy || loading || routingRequestState.saving) return;
+    routingRequestState.saving = true;
+    routingRequestState.revision += 1;
+    setBusy("routing-mode");
+    setError("");
+    setStatusMessage("");
+    try {
+      const result = await codexMuxRequest("/routing-mode", {
+        method: "PATCH",
+        body: JSON.stringify(nextMode),
+      });
+      setRoutingMode(result.routingMode);
+      setRoutingModeOpen(false);
+      setStatusMessage(nextMode.mode === "auto"
+        ? "Automatic routing selected."
+        : "Preferred subscription saved for new chats and failover.");
+      document.querySelector('[data-codex-mux-action="routing-mode"]')?.focus();
+    } catch (requestError) {
+      setError(requestError?.message || "The routing mode could not be saved.");
+    } finally {
+      routingRequestState.saving = false;
+      routingRequestState.revision += 1;
+      setBusy("");
+      if (routingRequestState.refreshPending) {
+        routingRequestState.refreshPending = false;
+        void refresh();
+      }
+    }
   }
 
   async function runAccountAction(action, operation, successMessage) {
@@ -840,6 +884,81 @@ function CodexMuxAccountMenu() {
       "codex-mux-total",
     ),
   );
+  const preferredAccount = accounts.find((account) => account.id === routingMode.accountId);
+  const routingLabel = routingMode.mode === "account"
+    ? preferredAccount?.label || "Preferred subscription"
+    : "Auto";
+  rows.push((0, e7.jsx)(_H, {
+    LeftIcon: S2,
+    SubText: routingMode.mode === "account"
+      ? "New chats prefer this subscription; Auto when unavailable"
+      : "Balances remaining usage and reset time",
+    "data-codex-mux-action": "routing-mode",
+    "aria-label": `Routing mode: ${routingLabel}`,
+    "aria-expanded": routingModeOpen,
+    "aria-controls": routingModeOpen ? "codex-mux-routing-options" : undefined,
+    "aria-busy": busy === "routing-mode",
+    "aria-disabled": loading || busy !== "",
+    onSelect: (event) => {
+      keepMenuOpen(event);
+      if (!loading && !busy) setRoutingModeOpen((current) => !current);
+    },
+    rightIcon: (0, e7.jsx)("span", {
+      "aria-hidden": true,
+      style: { maxWidth: "120px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+      children: `${routingLabel} ${routingModeOpen ? "▴" : "▾"}`,
+    }),
+    children: busy === "routing-mode" ? "Saving routing mode…" : "Routing mode",
+  }, "codex-mux-routing-mode"));
+  if (routingModeOpen) {
+    const options = [{ mode: "auto", label: "Auto", description: "Balances usage and reset time" },
+      ...accounts.map((account) => {
+        const state = codexMuxAccountStatus(account, loginAccountId);
+        const exhausted = [account.rateLimits?.primary, account.rateLimits?.secondary]
+          .some((window) => window != null && window.usedPercent >= 100);
+        return {
+          mode: "account", accountId: account.id, label: account.label,
+          disabled: !account.enabled,
+          description: !account.enabled ? "Disabled — enable to select"
+            : exhausted ? "Usage exhausted — Auto until quota resets"
+            : state.key !== "ready" ? `${state.label} — Auto while unavailable`
+            : "Prefer for new chats; Auto when unavailable",
+        };
+      })];
+    rows.push((0, e7.jsx)("div", {
+      id: "codex-mux-routing-options",
+      role: "group",
+      "aria-label": "Routing mode options",
+      style: { maxHeight: "240px", overflowY: "auto" },
+      onKeyDown: (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          setRoutingModeOpen(false);
+          document.querySelector('[data-codex-mux-action="routing-mode"]')?.focus();
+        }
+      },
+      children: options.map((option) => {
+        const checked = routingMode.mode === option.mode &&
+          (option.mode === "auto" || routingMode.accountId === option.accountId);
+        return (0, e7.jsx)(_H, {
+          role: "menuitemradio",
+          "aria-checked": checked,
+          "aria-disabled": !!option.disabled || busy !== "",
+          disabled: !!option.disabled || busy !== "",
+          "data-codex-mux-routing-option": option.accountId || "auto",
+          SubText: option.description,
+          rightIcon: (0, e7.jsx)("span", { "aria-hidden": true, children: checked ? "✓" : "" }),
+          onSelect: (event) => {
+            keepMenuOpen(event);
+            if (!option.disabled) void selectRoutingMode(option.mode === "auto"
+              ? { mode: "auto" } : { mode: "account", accountId: option.accountId }, event);
+          },
+          children: option.label,
+        }, `codex-mux-routing-${option.accountId || "auto"}`);
+      }),
+    }, "codex-mux-routing-options"));
+  }
   if (accounts.length > 0) {
     rows.push(
       (0, e7.jsx)(CH.Separator, {}, "codex-mux-accounts-separator"),

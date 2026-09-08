@@ -8,6 +8,11 @@ $go = Resolve-GoCommand
 
 $groups = @(
     @{
+        Name = 'persistent routing preference, account selection, and authenticated mode changes'
+        Package = './internal/state', './internal/mux', './internal/control'
+        Pattern = '^Test.*(RoutingMode|PreferredRouting).*$'
+    },
+    @{
         Name = 'account isolation, two-account state, sticky ownership, and plugin propagation'
         Package = './internal/state'
         Pattern = '^(TestStoreBootstrapsPrimaryAndPersistsThreadAffinity|TestAccountConfigInheritsManagedMCPAndPreservesLocalProjects|TestSyncManagedConfigPropagatesPluginsWithoutRestart|TestUpdateAccountPreservesController|TestWindows.*|Test.*Windows.*)$'

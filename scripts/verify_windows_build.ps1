@@ -1281,16 +1281,44 @@ function Test-AsarArchive {
             'CodexMuxThreadSubscription',
             'process.env.CODEX_MUX_HOME',
             "http://127.0.0.1:$ControlPort",
-            'function oY(e){return}',
-            'function sY(e){return}',
             'case`win32`:return[];',
-            'function yJ(e){if(process.platform===`win32`)return process.env.CODEX_MUX_HOME?',
             'if(process.platform===`win32`)return;'
         )
         $missingMarkers = @(Find-TextMarkersInFile -Path $AsarPath -Markers $routerMarkers)
         Add-Check -Name 'Patched ASAR contains router integration markers' -Passed ($missingMarkers.Count -eq 0) -Detail $(
             if ($missingMarkers.Count -eq 0) { "$($routerMarkers.Count) expected markers found" }
             else { 'Missing: ' + ($missingMarkers -join ', ') }
+        )
+
+        # Check each audited minifier profile as a complete group. Accepting any
+        # no-op function independently could mistake an unrelated function for
+        # the native-host guard, or accept a partially upgraded payload.
+        $isolationProfiles = @(
+            @{
+                Name = '26.820'
+                Markers = @(
+                    'function oY(e){return}',
+                    'function sY(e){return}',
+                    'function yJ(e){if(process.platform===`win32`)return process.env.CODEX_MUX_HOME?[(0,i.join)(process.env.CODEX_MUX_HOME,Mq)]:[];',
+                    'case`win32`:return(0,i.join)(process.env.CODEX_MUX_HOME??(0,i.join)(process.env.LOCALAPPDATA??(0,i.join)(r.default.homedir(),`AppData`,`Local`),`Codex Subscription Router`),Mq);'
+                )
+            },
+            @{
+                Name = '26.901'
+                Markers = @(
+                    'function LZ(e){return}',
+                    'function RZ(e){return}',
+                    'function XX(e){if(process.platform===`win32`)return process.env.CODEX_MUX_HOME?[(0,i.join)(process.env.CODEX_MUX_HOME,lX)]:[];',
+                    'case`win32`:return(0,i.join)(process.env.CODEX_MUX_HOME??(0,i.join)(process.env.LOCALAPPDATA??(0,i.join)(r.default.homedir(),`AppData`,`Local`),`Codex Subscription Router`),lX);'
+                )
+            }
+        )
+        $matchingProfiles = @($isolationProfiles | Where-Object {
+                @(Find-TextMarkersInFile -Path $AsarPath -Markers $_.Markers).Count -eq 0
+            })
+        Add-Check -Name 'Patched ASAR has a complete audited native-host isolation profile' -Passed ($matchingProfiles.Count -eq 1) -Detail $(
+            if ($matchingProfiles.Count -eq 1) { "Matched $($matchingProfiles[0].Name): registry add/delete disabled and both state paths isolated" }
+            else { "Expected exactly one complete isolation profile; found $($matchingProfiles.Count)" }
         )
 
         if (-not $LegacyControlPort) {
@@ -1305,6 +1333,9 @@ function Test-AsarArchive {
             'function oY(e){if(process.platform!==`win32`)return;',
             'function sY(e){let t=e.manifestPath;process.platform!==`win32`',
             'case`win32`:return Fy(`windows`).map',
+            'function LZ(e){if(process.platform!==`win32`)return;',
+            'function RZ(e){let t=e.manifestPath;process.platform!==`win32`',
+            'case`win32`:return Pb(`windows`).map',
             'case`win32`:return(0,i.join)(process.env.LOCALAPPDATA??',
             'OpenProjectInCodex'
         )

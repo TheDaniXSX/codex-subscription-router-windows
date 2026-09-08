@@ -7,6 +7,14 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Added a persistent Auto/preferred-subscription selector to the profile menu,
+  with automatic fallback, existing-chat affinity, keyboard navigation, and
+  authenticated local configuration synchronized across windows.
+- Added rollback-compatible private routing preferences without changing
+  subscription enablement or the existing account-state format.
+- Added the reviewed Windows package `26.901.6511.0` (desktop `26.901.51231`,
+  build `8109`, CLI `0.153.4`), adapting the split renderer bundles while
+  retaining the August package profile and router isolation.
 - Embedded the attributed Codex color icon in the x64 Windows launcher and
   added a Windows-native build check for the icon resource and ICO size table.
 - Kept the visible Electron child windows synchronized with the launcher icon

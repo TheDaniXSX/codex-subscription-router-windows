@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/mux"
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/state"
 )
 
 type Server struct {
@@ -30,6 +31,7 @@ func New(address, token string, multiplexer *mux.Multiplexer, uiTests bool) *Ser
 	router := http.NewServeMux()
 	router.HandleFunc("/v1/health", server.health)
 	router.HandleFunc("/v1/accounts", server.accounts)
+	router.HandleFunc("/v1/routing-mode", server.routingMode)
 	router.HandleFunc("/v1/accounts/", server.accountAction)
 	router.HandleFunc("/v1/thread-account", server.threadAccount)
 	router.HandleFunc("/v1/profile/combined", server.combinedProfile)
@@ -171,7 +173,7 @@ func (s *Server) accounts(response http.ResponseWriter, request *http.Request) {
 	case http.MethodGet:
 		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
 		defer cancel()
-		writeJSON(response, http.StatusOK, map[string]any{"accounts": s.mux.Accounts(ctx)})
+		writeJSON(response, http.StatusOK, map[string]any{"accounts": s.mux.Accounts(ctx), "routingMode": s.mux.RoutingMode()})
 	case http.MethodPost:
 		var input struct {
 			Label string `json:"label"`
@@ -191,6 +193,35 @@ func (s *Server) accounts(response http.ResponseWriter, request *http.Request) {
 	default:
 		methodNotAllowed(response)
 	}
+}
+
+func (s *Server) routingMode(response http.ResponseWriter, request *http.Request) {
+	if !s.authorized(request) {
+		writeJSON(response, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+		return
+	}
+	switch request.Method {
+	case http.MethodGet:
+	case http.MethodPatch:
+		var raw json.RawMessage
+		if err := decodeJSON(request, &raw); err != nil {
+			writeJSON(response, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		input, err := state.ParseRoutingMode(raw)
+		if err != nil {
+			writeJSON(response, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		if err := s.mux.SetRoutingMode(input); err != nil {
+			writeJSON(response, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+	default:
+		methodNotAllowed(response)
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"routingMode": s.mux.RoutingMode()})
 }
 
 func (s *Server) accountAction(response http.ResponseWriter, request *http.Request) {

@@ -185,13 +185,61 @@ class WindowsSourceInventoryTests(unittest.TestCase):
         markers = (
             "CodexMuxAccountMenu CodexMuxThreadSubscription process.env.CODEX_MUX_HOME "
             "http://127.0.0.1:60001 function oY(e){return} function sY(e){return} "
-            "case`win32`:return[]; function yJ(e){if(process.platform===`win32`)return process.env.CODEX_MUX_HOME? "
+            "case`win32`:return[]; function yJ(e){if(process.platform===`win32`)return process.env.CODEX_MUX_HOME?"
+            "[(0,i.join)(process.env.CODEX_MUX_HOME,Mq)]:[]; "
+            "case`win32`:return(0,i.join)(process.env.CODEX_MUX_HOME??(0,i.join)(process.env.LOCALAPPDATA??"
+            "(0,i.join)(r.default.homedir(),`AppData`,`Local`),`Codex Subscription Router`),Mq); "
             "if(process.platform===`win32`)return;"
         )
         bundle.write_text(markers, encoding="utf-8")
         locale = root / "native-menu-locales" / "en.json"
         locale.parent.mkdir(parents=True, exist_ok=True)
         locale.write_text("{}", encoding="utf-8")
+
+    def test_asar_verifier_requires_complete_current_isolation_profile(self) -> None:
+        node = shutil.which("node")
+        asar_cli = REPOSITORY_ROOT / "node_modules" / "@electron" / "asar" / "bin" / "asar.mjs"
+        if node is None or not asar_cli.is_file():
+            self.skipTest("node and the pinned @electron/asar dependency are required")
+        source = Path(self.temporary.name) / "current-asar"
+        self._write_build_asar_source(source)
+        bundle = source / ".vite" / "build" / "src-fixture.js"
+        current = bundle.read_text(encoding="utf-8")
+        for old, new in (("oY", "LZ"), ("sY", "RZ"), ("yJ", "XX"), ("Mq", "lX")):
+            current = current.replace(old, new)
+        archive = Path(self.temporary.name) / "current.asar"
+        # Load only the verifier's inspection functions: no installed app,
+        # signatures, state, or inventory participates in this focused test.
+        command = r"""
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($args[0], [ref]$null, [ref]$null)
+$names = @('Add-Check', 'Find-TextMarkersInFile', 'Invoke-CapturedProcess', 'Test-AsarArchive')
+foreach ($definition in $ast.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst]}, $false)) {
+    if ($names -contains $definition.Name) { Invoke-Expression $definition.Extent.Text }
+}
+$script:Checks = New-Object 'System.Collections.Generic.List[object]'
+Test-AsarArchive -AsarPath $args[1] -Root $args[2] -ControlPort 60001 -LegacyControlPort $false
+$script:Checks.ToArray() | ConvertTo-Json -Compress
+"""
+        probe = Path(self.temporary.name) / "probe.ps1"
+        probe.write_text(command, encoding="utf-8")
+        variants = (
+            ("current", current, True),
+            ("mixed aliases", current.replace("function RZ(e){return}", "function sY(e){return}"), False),
+            ("missing state isolation", current.replace("CODEX_MUX_HOME,lX", "LOCALAPPDATA,lX"), False),
+            ("active registry mutation", current + " function LZ(e){if(process.platform!==`win32`)return;", False),
+            ("active manifest lookup", current + " case`win32`:return Pb(`windows`).map", False),
+        )
+        for label, text, expected in variants:
+            with self.subTest(label=label):
+                bundle.write_text(text, encoding="utf-8")
+                subprocess.run([node, str(asar_cli), "pack", str(source), str(archive)], check=True, capture_output=True)
+                result = subprocess.run(
+                    [self.shell, "-NoProfile", "-NonInteractive", "-File", str(probe), str(VERIFY_SCRIPT), str(archive), str(REPOSITORY_ROOT)],
+                    capture_output=True, text=True, encoding="utf-8-sig", check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                checks = json.loads(result.stdout)
+                self.assertEqual(all(check["Passed"] for check in checks), expected, checks)
 
     def test_archived_package_inventory_is_complete_and_deterministic(self) -> None:
         first = self._inventory()
