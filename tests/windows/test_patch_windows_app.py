@@ -164,6 +164,49 @@ class TokenTests(unittest.TestCase):
 
 
 class AnchorTests(unittest.TestCase):
+    def test_current_native_profile_preserves_fail_closed_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            assets = root / "webview" / "assets"
+            assets.mkdir(parents=True)
+            (assets / "app-primary-fixture.js").write_text("", encoding="utf-8")
+            self.assertEqual(patcher._native_anchor(root, "function oY(e){return}"),
+                             "function LZ(e){return}")
+            build = root / ".vite" / "build"
+            build.mkdir(parents=True)
+            # An unknown/missing source anchor must not silently disable qualification.
+            (build / "src-fixture.js").write_text("async function LZ(e){changed()}", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "registry delete anchor"):
+                patcher.patch_windows_native_messaging_isolation(root)
+
+    def test_current_appshots_requires_opt_in_and_native_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            assets = root / "webview" / "assets"
+            assets.mkdir(parents=True)
+            (assets / "app-primary-fixture.js").write_text("", encoding="utf-8")
+            build = root / ".vite" / "build"
+            build.mkdir(parents=True)
+            main = build / "main-fixture.js"
+            source = (
+                "ae=v&&a.a.isInternal(t)?SIe(h):null,oe=new dIe;"
+                "let n=U(),r=n.skysight,o=Or(e);I&&B.windowsCaptureNativeBridge==null&&(o.appshotsEnabled=!1),"
+                "I&&!a.a.isInternal(c)&&(o.appshotsEnabled=!1),Be.setDesktopFeatureAvailability(o);"
+            )
+            main.write_text(source, encoding="utf-8")
+            patcher.patch_windows_appshots_gate(root)
+            result = patcher.verify_windows_appshots_contract(root)
+            self.assertFalse(result["defaultEnabled"])
+            self.assertTrue(result["requiresNativeBridge"])
+            patched = main.read_text(encoding="utf-8")
+            self.assertEqual(patched.count('CODEX_ROUTER_ENABLE_APPSHOTS==="1"'), 2)
+            main.write_text(patched + "o.appshotsEnabled=!0", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "unconditionally"):
+                patcher.verify_windows_appshots_contract(root)
+            main.write_text(source + source, encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "expected one"):
+                patcher.patch_windows_appshots_gate(root)
+
     def test_replace_unique_fails_closed(self) -> None:
         self.assertEqual(patcher.replace_unique("abc", "b", "B", "test"), "aBc")
         for text in ("abcabc", "xyz"):

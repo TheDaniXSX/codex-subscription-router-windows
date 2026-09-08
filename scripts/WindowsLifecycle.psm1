@@ -252,10 +252,25 @@ function Assert-CsrInstallationIntegrity {
         (Test-Path -LiteralPath (Join-Path $layout 'resources\codex.real.exe') -PathType Leaf)) {
         $checks += [PSCustomObject]@{ Name = 'preserved official Codex CLI'; Path = (Join-Path $layout 'resources\codex.real.exe'); Hash = [string]$manifest.sourceCodexSha256 }
     }
+    $desktopIntegrity = $null
+    if ($null -ne $manifest.PSObject.Properties['preservation'] -and
+        $null -ne $manifest.preservation.PSObject.Properties['desktopIntegrity']) {
+        $desktopIntegrity = $manifest.preservation.desktopIntegrity
+    }
+    $originalDesktopLeaf = if ($null -ne $desktopIntegrity) { 'ChatGPT.original.exe' } else { 'ChatGPT.real.exe' }
+    if ($null -ne $desktopIntegrity) {
+        if ($null -eq $manifest.PSObject.Properties['sourceChatGptSha256'] -or
+            [string]$manifest.sourceChatGptSha256 -notmatch '^[0-9a-fA-F]{64}$' -or
+            [string]$desktopIntegrity.originalDesktopSha256 -ne [string]$manifest.sourceChatGptSha256 -or
+            [string]$desktopIntegrity.runtimeDesktopSha256 -notmatch '^[0-9a-fA-F]{64}$') {
+            throw 'Invalid desktop integrity provenance in installation manifest.'
+        }
+        $checks += [PSCustomObject]@{ Name = 'ASAR-bound runtime desktop'; Path = (Join-Path $layout 'ChatGPT.real.exe'); Hash = [string]$desktopIntegrity.runtimeDesktopSha256 }
+    }
     if ($null -ne $manifest.PSObject.Properties['sourceChatGptSha256'] -and
         -not [string]::IsNullOrWhiteSpace([string]$manifest.sourceChatGptSha256) -and
-        (Test-Path -LiteralPath (Join-Path $layout 'ChatGPT.real.exe') -PathType Leaf)) {
-        $checks += [PSCustomObject]@{ Name = 'preserved official desktop'; Path = (Join-Path $layout 'ChatGPT.real.exe'); Hash = [string]$manifest.sourceChatGptSha256 }
+        ($null -ne $desktopIntegrity -or (Test-Path -LiteralPath (Join-Path $layout $originalDesktopLeaf) -PathType Leaf))) {
+        $checks += [PSCustomObject]@{ Name = 'preserved official desktop'; Path = (Join-Path $layout $originalDesktopLeaf); Hash = [string]$manifest.sourceChatGptSha256 }
     }
     if ($null -ne $manifest.PSObject.Properties['preservation'] -and
         $null -ne $manifest.preservation.PSObject.Properties['cliHelpers']) {

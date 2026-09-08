@@ -26,16 +26,19 @@ router** cuando se usa `-Force`.
 > del equipo. No debe subirse a Git, adjuntarse a una release ni redistribuirse.
 > El repositorio publica únicamente código fuente y herramientas.
 
-## Compatibilidad inicial
+## Compatibilidad
 
-El baseline aprobado es:
+La versión más reciente revisada es:
 
 | Componente | Valor |
 | --- | --- |
 | Paquete | `OpenAI.Codex` |
-| Versión | `26.820.9563.0` |
+| Versión | `26.901.6511.0` |
 | Arquitectura | `x64` |
-| `app.asar` SHA-256 | `e353c580ef4939d36f4ae32a35c896d089205c1d06b9f711cf78ffa4a3578a8a` |
+| `app.asar` SHA-256 | `e75bae2b8a02f174c7ceeed6d631aaff355e44f8af5c798fa3628089f11d659e` |
+
+También se conserva compatibilidad con `26.820.9563.0`. Los perfiles exactos
+están documentados en [COMPATIBILITY.md](COMPATIBILITY.md).
 
 El instalador selecciona de forma predeterminada el paquete
 `OpenAI.Codex` más reciente registrado para el usuario. Si Microsoft Store ya
@@ -136,6 +139,23 @@ bajo `HKCU` y no toma posesión de `codex://`. Consulte
 [WINDOWS-SHELL-INTEGRATION.md](WINDOWS-SHELL-INTEGRATION.md) para el contrato de
 URI, las claves exactas y la desactivación compare-and-delete.
 
+## Elegir la suscripción que se consume
+
+En el menú de perfil, abra **Routing mode**, debajo de **Usage remaining**.
+**Auto** mantiene el reparto inteligente. Al elegir una suscripción, incluida
+Primary, el router la prioriza en los chats nuevos y al cambiar de cuenta por
+agotamiento. Las conversaciones abiertas conservan su cuenta hasta necesitar
+ese cambio, para mantener el contexto.
+
+Si la preferida se agota o se desconecta temporalmente, el router utiliza las
+demás automáticamente y conserva la preferencia para cuando se recupere.
+La selección se guarda inmediatamente, sin reiniciar la aplicación ni desactivar
+cuentas. Eliminar o deshabilitar manualmente la elegida devuelve el modo a Auto.
+
+La configuración reside en `routing-mode.json` junto a `state.json`, con escritura
+atómica y permisos privados. Una versión antigua ignora este archivo, por lo que
+la selección no impide volver al programa anterior.
+
 ## Qué se crea
 
 El layout soportado es portable y tiene como raíz el destino:
@@ -143,7 +163,8 @@ El layout soportado es portable y tiene como raíz el destino:
 ```text
 %LOCALAPPDATA%\Programs\Codex Subscription Router\
 ├── ChatGPT.exe                 launcher independiente
-├── ChatGPT.real.exe            escritorio oficial copiado
+├── ChatGPT.real.exe            escritorio local con huella ASAR actualizada
+├── ChatGPT.original.exe        escritorio oficial intacto (perfil septiembre)
 ├── resources\
 │   ├── app.asar                renderer parcheado
 │   ├── codex.exe               codex-mux.exe

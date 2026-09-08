@@ -462,6 +462,44 @@ class PowerShellLifecycleTests(unittest.TestCase):
         self.assertNotIn("Set-Acl -", lifecycle_source)
         self.assertNotIn("AuditRule", lifecycle_source)
 
+    def test_integrity_checks_preserved_and_asar_bound_desktop_separately(self) -> None:
+        manifest = self._write_layout(self.destination, "integrity")
+        original = self.destination / "ChatGPT.original.exe"
+        runtime = self.destination / "ChatGPT.real.exe"
+        original.write_bytes(b"signed-original-fixture")
+        runtime.write_bytes(b"local-asar-bound-runtime-fixture")
+        manifest["sourceChatGptSha256"] = sha256(original)
+        manifest["preservation"] = {"desktopIntegrity": {
+            "originalDesktopSha256": sha256(original),
+            "runtimeDesktopSha256": sha256(runtime),
+        }}
+        (self.destination / "codex-mux-build.json").write_text(json.dumps(manifest), encoding="utf-8")
+        probe = self.tool / "verify-integrity.ps1"
+        probe.write_text(
+            "$ErrorActionPreference='Stop'\n"
+            "Import-Module (Join-Path $PSScriptRoot 'WindowsLifecycle.psm1') -Force\n"
+            "[void](Assert-CsrInstallationIntegrity -LayoutPath $args[0] -ExpectedDestination $args[0] -ExpectedStateRoot $args[1])\n",
+            encoding="utf-8",
+        )
+
+        def verify() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [str(self.shell), "-NoProfile", "-NonInteractive", "-File", str(probe), str(self.destination), str(self.state)],
+                cwd=self.work, env=self.env, capture_output=True, text=True, timeout=15, check=False,
+            )
+
+        result = verify()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for file_path in (runtime, original):
+            with self.subTest(file=file_path.name):
+                previous = file_path.read_bytes()
+                file_path.write_bytes(previous + b"tampered")
+                self.assertNotEqual(verify().returncode, 0)
+                file_path.write_bytes(previous)
+                file_path.unlink()
+                self.assertNotEqual(verify().returncode, 0)
+                file_path.write_bytes(previous)
+
     def test_tree_digest_matches_inventory_folded_ordinal_contract(self) -> None:
         tree = self.allowed / "tree-digest"
         first = tree / "bin" / "nodevars.bat"

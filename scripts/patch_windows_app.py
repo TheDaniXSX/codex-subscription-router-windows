@@ -48,6 +48,19 @@ DEFAULT_STATE_ROOT = (
 # version/build are recorded separately because OpenAI currently ships them at
 # different version numbers.
 TESTED_SOURCE_BUILDS: dict[str, dict[str, str]] = {
+    "26.901.6511.0": {
+        "asar_version": "26.901.51231",
+        "asar_build": "8109",
+        "asar_sha256": "e75bae2b8a02f174c7ceeed6d631aaff355e44f8af5c798fa3628089f11d659e",
+        "codex_sha256": "e5aa76d19c7c94e2e9ef9b707d590206a73ac0e97c8ddc8382181242494bef75",
+        "chatgpt_sha256": "814e9fbd141cfa2aaefa33220bc3a7170824e18089946bf1947617597353851d",
+        "codex_launcher_sha256": "8c725ce6a4d04cff93dbbe525d00a8379684c9bcaa84dcd492c2ee544742c08f",
+        "windows_account_sha256": "eb3b16e5ad56de88f93d7170895434ff177b2602c82a54ce92fe176d29166d38",
+        "cua_tree_sha256": "c2b1cb4ea9e1394bf5c7ae189d3b82d1732c105a680a3762894dc7a08f531ee7",
+        "cua_node_version": "24.19.0",
+        "cua_runtime_version": "0.0.9/20260829001140-68931e022688",
+        "cua_package_version": "0.2.4",
+    },
     "26.820.9563.0": {
         "asar_version": "26.820.71523",
         "asar_build": "7226",
@@ -862,6 +875,18 @@ def patch_windows_bootstrap(extracted: Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _is_split_renderer(extracted: Path) -> bool:
+    return any((extracted / "webview" / "assets").glob("app-primary-*.js"))
+
+
+def _native_anchor(extracted: Path, value: str) -> str:
+    if not _is_split_renderer(extracted):
+        return value
+    mapping = {"oY": "LZ", "sY": "RZ", "jq": "cX", "Oq": "aX",
+               "Fy": "Pb", "yJ": "XX", "bJ": "ZX", "Mq": "lX"}
+    return re.sub(r"[A-Za-z_$][\w$]*", lambda m: mapping.get(m[0], m[0]), value)
+
+
 def patch_windows_runtime_paths(extracted: Path) -> None:
     build = extracted / ".vite" / "build"
     source_files = list(build.glob("src-*.js"))
@@ -869,6 +894,8 @@ def patch_windows_runtime_paths(extracted: Path) -> None:
         "function fF(e){return(0,i.join)(process.env.LOCALAPPDATA??"
         "(0,i.join)((0,r.homedir)(),`AppData`,`Local`),...e)}"
     )
+    runtime_name = "yL" if _is_split_renderer(extracted) else "fF"
+    runtime_anchor = runtime_anchor.replace("function fF(", f"function {runtime_name}(")
     matches = [path for path in source_files if runtime_anchor in path.read_text(encoding="utf-8")]
     if len(matches) != 1:
         raise RuntimeError(f"expected one bundled-runtime cache root anchor, found {len(matches)}")
@@ -882,6 +909,7 @@ def patch_windows_runtime_paths(extracted: Path) -> None:
         "return(0,i.join)(process.env.LOCALAPPDATA??"
         "(0,i.join)((0,r.homedir)(),`AppData`,`Local`),...e)}"
     )
+    runtime_replacement = runtime_replacement.replace("function fF(", f"function {runtime_name}(")
     text = replace_unique(text, runtime_anchor, runtime_replacement, "runtime cache isolation")
     path.write_text(text, encoding="utf-8")
 
@@ -920,6 +948,8 @@ def patch_windows_native_messaging_isolation(extracted: Path) -> None:
         "function oY(e){if(process.platform!==`win32`)return;let t=`${jq}\\\\${e}`;"
         "try{await Oq(`reg`,[`query`,t])}catch{return}await Oq(`reg`,[`delete`,t,`/f`])}"
     )
+    remap = lambda value: _native_anchor(extracted, value)
+    registry_delete_anchor = remap(registry_delete_anchor)
     matches = [path for path in source_files if registry_delete_anchor in path.read_text(encoding="utf-8")]
     if len(matches) != 1:
         raise RuntimeError(f"expected one native-host registry delete anchor, found {len(matches)}")
@@ -928,7 +958,7 @@ def patch_windows_native_messaging_isolation(extracted: Path) -> None:
     text = replace_unique(
         text,
         registry_delete_anchor,
-        "function oY(e){return}",
+        remap("function oY(e){return}"),
         "native-host registry delete",
     )
     registry_add_anchor = (
@@ -936,16 +966,18 @@ def patch_windows_native_messaging_isolation(extracted: Path) -> None:
         "await Oq(`reg`,[`add`,`${jq}\\\\${e.nativeHostName}`,`/ve`,`/t`,`REG_SZ`,"
         "`/d`,t,`/f`])}"
     )
+    registry_add_anchor = remap(registry_add_anchor)
     text = replace_unique(
         text,
         registry_add_anchor,
-        "function sY(e){return}",
+        remap("function sY(e){return}"),
         "native-host registry add",
     )
     manifest_read_anchor = (
         "case`win32`:return Fy(`windows`).map(t=>(0,i.join)(r.default.homedir(),"
         "t,`${e}.json`));"
     )
+    manifest_read_anchor = remap(manifest_read_anchor)
     text = replace_unique(
         text,
         manifest_read_anchor,
@@ -961,6 +993,8 @@ def patch_windows_native_messaging_isolation(extracted: Path) -> None:
         "[(0,i.join)(process.env.CODEX_MUX_HOME,Mq)]:[];let t=bJ();return"
         "[...t==null?[]:[t],(0,i.join)(e.codexHome,Mq)].filter((e,t,n)=>n.indexOf(e)===t)}"
     )
+    state_paths_anchor = remap(state_paths_anchor)
+    state_paths_replacement = remap(state_paths_replacement)
     text = replace_unique(
         text,
         state_paths_anchor,
@@ -976,6 +1010,8 @@ def patch_windows_native_messaging_isolation(extracted: Path) -> None:
         "(0,i.join)(process.env.LOCALAPPDATA??(0,i.join)(r.default.homedir(),"
         "`AppData`,`Local`),`Codex Subscription Router`),Mq);"
     )
+    global_state_anchor = remap(global_state_anchor)
+    global_state_replacement = remap(global_state_replacement)
     text = replace_unique(
         text,
         global_state_anchor,
@@ -1035,6 +1071,9 @@ def patch_windows_appshots_gate(extracted: Path) -> None:
         "V=y&&(a.a.isInternal(i)||process.env.CODEX_ROUTER_ENABLE_APPSHOTS===\"1\")"
         "?Uje(g):null,ne=new PAe"
     )
+    if _is_split_renderer(extracted):
+        bridge_anchor = "ae=v&&a.a.isInternal(t)?SIe(h):null,oe=new dIe"
+        bridge_replacement = 'ae=v&&(a.a.isInternal(t)||process.env.CODEX_ROUTER_ENABLE_APPSHOTS==="1")?SIe(h):null,oe=new dIe'
     text = replace_unique(
         text,
         bridge_anchor,
@@ -1051,6 +1090,9 @@ def patch_windows_appshots_gate(extracted: Path) -> None:
         "I&&H.windowsCaptureNativeBridge==null&&(s.appshotsEnabled=!1),"
         "I&&!a.a.isInternal(c)&&(s.appshotsEnabled=!1)}Re.setDesktopFeatureAvailability(s);"
     )
+    if _is_split_renderer(extracted):
+        feature_anchor = "let n=U(),r=n.skysight,o=Or(e);I&&B.windowsCaptureNativeBridge==null&&(o.appshotsEnabled=!1),I&&!a.a.isInternal(c)&&(o.appshotsEnabled=!1),Be.setDesktopFeatureAvailability(o);"
+        feature_replacement = 'let n=U(),r=n.skysight,o=Or(e);if(I&&process.env.CODEX_ROUTER_ENABLE_APPSHOTS==="1")o.appshotsEnabled=B.windowsCaptureNativeBridge!=null;else{I&&B.windowsCaptureNativeBridge==null&&(o.appshotsEnabled=!1),I&&!a.a.isInternal(c)&&(o.appshotsEnabled=!1)}Be.setDesktopFeatureAvailability(o);'
     text = replace_unique(
         text,
         feature_anchor,
@@ -1077,10 +1119,13 @@ def verify_windows_appshots_contract(extracted: Path) -> dict[str, object]:
         "a.a.isInternal(i)||" + strict_gate,
         "s.appshotsEnabled=H.windowsCaptureNativeBridge!=null",
     )
+    if _is_split_renderer(extracted):
+        required = ("a.a.isInternal(t)||" + strict_gate,
+                    "o.appshotsEnabled=B.windowsCaptureNativeBridge!=null")
     for marker in required:
         if marker not in text:
             raise RuntimeError(f"Appshots opt-in contract is missing {marker!r}")
-    if "s.appshotsEnabled=!0" in text:
+    if "s.appshotsEnabled=!0" in text or (_is_split_renderer(extracted) and "o.appshotsEnabled=!0" in text):
         raise RuntimeError("Appshots was enabled unconditionally")
     return {
         "qualification": "static-contract-only",
@@ -1123,6 +1168,17 @@ def _prepare_account_component(token: str, control_port: int) -> str:
 
 
 def patch_windows_renderer(extracted: Path, token: str, control_port: int) -> None:
+    if _is_split_renderer(extracted):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "windows_renderer_26901", PROJECT_ROOT / "scripts" / "windows_renderer_26901.py"
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError("could not load the split renderer compatibility module")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.patch_renderer(extracted, token, control_port)
+        return
     webview = extracted / "webview"
     index_path = webview / "index.html"
     index = index_path.read_text(encoding="utf-8")
@@ -1419,6 +1475,26 @@ def swap_executables(staged_app: Path, mux: Path, launcher: Path) -> None:
             raise RuntimeError(f"{label} is not a PE executable after staging: {path}")
 
 
+def rebind_desktop_integrity(staged_app: Path, source_app: Path) -> dict[str, object]:
+    """Preserve signed provenance and update only Electron's expected ASAR hash."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "windows_asar_integrity", PROJECT_ROOT / "scripts" / "windows_asar_integrity.py"
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load desktop integrity support")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    original = staged_app / "ChatGPT.original.exe"
+    if original.exists():
+        raise RuntimeError("staging already contains an original desktop backup")
+    shutil.copy2(source_app / "ChatGPT.exe", original)
+    return module.patch_desktop_integrity(
+        original, staged_app / "ChatGPT.real.exe", staged_app / "resources" / "app.asar",
+        source_app / "resources" / "app.asar",
+    )
+
+
 def verify_preserved_windows_resources(source_app: Path, staged_app: Path) -> dict[str, object]:
     source_resources = source_app / "resources"
     staged_resources = staged_app / "resources"
@@ -1672,7 +1748,13 @@ def patch_app(
         unpacked = repack_asar(asar, extracted, repacked, official_unpacked_files)
         install_repacked_asar(staged_app, repacked, unpacked)
         swap_executables(staged_app, mux, launcher)
+        desktop_integrity = (
+            rebind_desktop_integrity(staged_app, source.app_root)
+            if _is_split_renderer(extracted) else None
+        )
         preservation = verify_preserved_windows_resources(source.app_root, staged_app)
+        if desktop_integrity is not None:
+            preservation["desktopIntegrity"] = desktop_integrity
         planned_backup = (
             plan_backup_path(destination) if destination.exists() and not dry_run else None
         )
