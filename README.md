@@ -295,6 +295,9 @@ defines the non-interactive contract gate and the remaining VM checklist.
   Calculator/process/isolation E2E passes for the exact release candidate.
 - The local unpackaged launcher is unsigned. A redistributable MSIX requires a
   separate trusted publisher certificate and its own package identity.
+- The September local desktop also has a modified ASAR integrity digest and is
+  no longer Authenticode-valid. The signed original is retained separately;
+  verification permits only that digest change and keeps integrity checks enabled.
 - Releases are source-only; patched OpenAI binaries are never distributed.
 
 ## Contributing and releases

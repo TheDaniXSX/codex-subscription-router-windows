@@ -163,7 +163,8 @@ El layout soportado es portable y tiene como raíz el destino:
 ```text
 %LOCALAPPDATA%\Programs\Codex Subscription Router\
 ├── ChatGPT.exe                 launcher independiente
-├── ChatGPT.real.exe            escritorio oficial copiado
+├── ChatGPT.real.exe            escritorio local con huella ASAR actualizada
+├── ChatGPT.original.exe        escritorio oficial intacto (perfil septiembre)
 ├── resources\
 │   ├── app.asar                renderer parcheado
 │   ├── codex.exe               codex-mux.exe

@@ -285,6 +285,14 @@ function Resolve-SourceLayout {
     }
     if ((Test-Path -LiteralPath (Join-Path $root 'resources\app.asar') -PathType Leaf) -and
         (Test-Path -LiteralPath (Join-Path $root 'ChatGPT.exe') -PathType Leaf)) {
+        # Build metadata records the Electron app directory, whereas package
+        # identity lives one level above it. Recover only that exact layout;
+        # Test-LiveSourceIdentity still validates name/version/publisher later.
+        $parent = Split-Path -Parent $root
+        if ((Split-Path -Leaf $root).Equals('app', [System.StringComparison]::OrdinalIgnoreCase) -and
+            (Test-Path -LiteralPath (Join-Path $parent 'AppxManifest.xml') -PathType Leaf)) {
+            return [pscustomobject]@{ PackageRoot = $parent; AppRoot = $root }
+        }
         return [pscustomobject]@{ PackageRoot = $null; AppRoot = $root }
     }
     throw "Source does not contain an Electron Codex payload: $root"
@@ -486,12 +494,14 @@ function Test-TrackedRepositoryContent {
 function Test-CopyStructure {
     param(
         [Parameter(Mandatory = $true)][string]$SourceAppRoot,
-        [Parameter(Mandatory = $true)][string]$DestinationAppRoot
+        [Parameter(Mandatory = $true)][string]$DestinationAppRoot,
+        [string]$PreservedDesktopLeaf = 'ChatGPT.real.exe'
     )
 
     $required = @(
         'ChatGPT.exe',
         'ChatGPT.real.exe',
+        $PreservedDesktopLeaf,
         'Codex.exe',
         'resources',
         'resources\app.asar',
@@ -515,7 +525,7 @@ function Test-CopyStructure {
         $relative = $sourceFile.FullName.Substring($SourceAppRoot.Length).TrimStart('\', '/')
         $destinationRelative = $relative
         if ($relative.Equals('ChatGPT.exe', [System.StringComparison]::OrdinalIgnoreCase)) {
-            $destinationRelative = 'ChatGPT.real.exe'
+            $destinationRelative = $PreservedDesktopLeaf
         }
         elseif ($relative.Equals('resources\codex.exe', [System.StringComparison]::OrdinalIgnoreCase)) {
             $destinationRelative = 'resources\codex.real.exe'
@@ -751,7 +761,7 @@ function Test-InventoryPayloadAgainstBuild {
         }
         $destinationRelative = $sourceRelative
         if ($sourceRelative.Equals('ChatGPT.exe', [System.StringComparison]::OrdinalIgnoreCase)) {
-            $destinationRelative = 'ChatGPT.real.exe'
+            $destinationRelative = Get-PreservedDesktopLeaf -Manifest $BuildManifest
         }
         elseif ($sourceRelative.Equals('resources\codex.exe', [System.StringComparison]::OrdinalIgnoreCase)) {
             $destinationRelative = 'resources\codex.real.exe'
@@ -832,6 +842,49 @@ function Get-Sha256Declarations {
     return $results.ToArray()
 }
 
+function Get-PreservedDesktopLeaf {
+    param([Parameter(Mandatory = $true)][object]$Manifest)
+    $preservation = Get-JsonProperty -Object $Manifest -Name 'preservation'
+    if ($null -ne (Get-JsonProperty -Object $preservation -Name 'desktopIntegrity')) {
+        return 'ChatGPT.original.exe'
+    }
+    return 'ChatGPT.real.exe'
+}
+
+function Test-DesktopAsarIntegrity {
+    param(
+        [Parameter(Mandatory = $true)][object]$Manifest,
+        [Parameter(Mandatory = $true)][string]$DestinationAppRoot
+    )
+    $preservation = Get-JsonProperty -Object $Manifest -Name 'preservation'
+    $declared = Get-JsonProperty -Object $preservation -Name 'desktopIntegrity'
+    if ($null -eq $declared) { return }
+    try {
+        $python = Get-Command python -ErrorAction Stop
+        $helper = Join-Path $RepositoryRoot 'scripts\windows_asar_integrity.py'
+        $result = Invoke-CapturedProcess -FilePath $python.Source -Arguments @(
+            $helper, '--verify',
+            (Join-Path $DestinationAppRoot 'ChatGPT.original.exe'),
+            (Join-Path $DestinationAppRoot 'ChatGPT.real.exe'),
+            (Join-Path $DestinationAppRoot 'resources\app.asar')
+        ) -TimeoutMilliseconds 30000
+        if ($result.ExitCode -ne 0) { throw "Desktop integrity inspection failed: $($result.Stderr.Trim())" }
+        $actual = $result.Stdout | ConvertFrom-Json
+        $expectedNames = @('originalDesktopSha256', 'runtimeDesktopSha256', 'asarHeaderSha256', 'originalAsarHeaderSha256', 'resourcePath', 'signatureStatus', 'integrityEnabled')
+        $declaredNames = @($declared.PSObject.Properties | ForEach-Object { $_.Name })
+        if ($declaredNames.Count -ne $expectedNames.Count) { throw 'Unexpected desktop integrity metadata fields' }
+        foreach ($name in $expectedNames) {
+            if ($declaredNames -notcontains $name -or (Get-JsonProperty -Object $declared -Name $name) -cne (Get-JsonProperty -Object $actual -Name $name)) {
+                throw "Desktop integrity metadata mismatch: $name"
+            }
+        }
+        Add-Check -Name 'Desktop ASAR integrity and exact resource-only modification are verified' -Passed $true -Detail 'ASAR header SHA-256 matches the PE integrity resource; every byte outside its digest, including Electron fuses, matches the signed original'
+    }
+    catch {
+        Add-Check -Name 'Desktop ASAR integrity and exact resource-only modification are verified' -Passed $false -Detail $_.Exception.Message
+    }
+}
+
 function Test-AllManifestHashes {
     param(
         [Parameter(Mandatory = $true)][object]$Manifest,
@@ -840,7 +893,7 @@ function Test-AllManifestHashes {
     )
 
     $fileHashMappings = [ordered]@{
-        sourceChatGptSha256 = 'ChatGPT.real.exe'
+        sourceChatGptSha256 = (Get-PreservedDesktopLeaf -Manifest $Manifest)
         sourceCodexLauncherSha256 = 'Codex.exe'
         sourceCodexSha256 = 'resources\codex.real.exe'
         sourceWindowsAccountSha256 = 'resources\native\windows-account.node'
@@ -875,6 +928,18 @@ function Test-AllManifestHashes {
     [void]$validatedNames.Add('sourceAsarSha256')
 
     $preservation = Get-JsonProperty -Object $Manifest -Name 'preservation'
+    $desktopIntegrity = Get-JsonProperty -Object $preservation -Name 'desktopIntegrity'
+    if ($null -ne $desktopIntegrity) {
+        # The resource verifier below validates these against the actual PE and
+        # ASAR bytes, including the original resource hash in the signed backup.
+        foreach ($name in @('originalDesktopSha256', 'runtimeDesktopSha256', 'asarHeaderSha256', 'originalAsarHeaderSha256')) {
+            if ([string](Get-JsonProperty -Object $desktopIntegrity -Name $name) -notmatch '^[0-9a-f]{64}$') {
+                $problems.Add("preservation.desktopIntegrity.$name")
+            }
+            [void]$validatedNames.Add("preservation.desktopIntegrity.$name")
+        }
+        Test-DesktopAsarIntegrity -Manifest $Manifest -DestinationAppRoot $DestinationAppRoot
+    }
     $cliHelpers = Get-JsonProperty -Object $preservation -Name 'cliHelpers'
     if ($null -eq $cliHelpers) {
         $problems.Add('preservation.cliHelpers')
@@ -1541,7 +1606,7 @@ try {
     )
 
     if ($sourceApp) {
-        Test-CopyStructure -SourceAppRoot $sourceApp -DestinationAppRoot $destinationApp
+        Test-CopyStructure -SourceAppRoot $sourceApp -DestinationAppRoot $destinationApp -PreservedDesktopLeaf (Get-PreservedDesktopLeaf -Manifest $manifest)
     }
     if ($null -ne $sourceInventory) {
         Test-InventoryPayloadAgainstBuild -Inventory $sourceInventory -DestinationAppRoot $destinationApp -BuildManifest $manifest
@@ -1565,6 +1630,7 @@ try {
     $destinationRealCodex = Join-Path $destinationApp 'resources\codex.real.exe'
     $destinationLauncher = Join-Path $destinationApp 'ChatGPT.exe'
     $destinationRealDesktop = Join-Path $destinationApp 'ChatGPT.real.exe'
+    $destinationOriginalDesktop = Join-Path $destinationApp (Get-PreservedDesktopLeaf -Manifest $manifest)
 
     $sourceAsarHash = if ($sourceApp) { Get-Sha256 -Path $sourceAsar } else { Get-InventoryPayloadHash -Inventory $sourceInventory -RelativePath 'resources/app.asar' }
     $sourceCodexHash = if ($sourceApp) { Get-Sha256 -Path $sourceCodex } else { Get-InventoryPayloadHash -Inventory $sourceInventory -RelativePath 'resources/codex.exe' }
@@ -1574,6 +1640,7 @@ try {
     $destinationRealCodexHash = Get-Sha256 -Path $destinationRealCodex
     $destinationLauncherHash = Get-Sha256 -Path $destinationLauncher
     $destinationRealDesktopHash = Get-Sha256 -Path $destinationRealDesktop
+    $destinationOriginalDesktopHash = Get-Sha256 -Path $destinationOriginalDesktop
 
     $manifestSourceAsarHash = Get-JsonProperty -Object $manifest -Name 'sourceAsarSha256'
     $manifestSourceCodexHash = Get-JsonProperty -Object $manifest -Name 'sourceCodexSha256'
@@ -1600,9 +1667,9 @@ try {
     Add-Check -Name 'codex.real.exe is the exact official binary' -Passed (
         $destinationRealCodexHash -eq $sourceCodexHash
     ) -Detail "source=$sourceCodexHash real=$destinationRealCodexHash"
-    Add-Check -Name 'ChatGPT.real.exe is the exact official desktop binary' -Passed (
-        $destinationRealDesktopHash -eq $sourceDesktopHash
-    ) -Detail "source=$sourceDesktopHash real=$destinationRealDesktopHash"
+    Add-Check -Name 'Preserved desktop is the exact official binary' -Passed (
+        $destinationOriginalDesktopHash -eq $sourceDesktopHash
+    ) -Detail "source=$sourceDesktopHash preserved=$destinationOriginalDesktopHash"
     Add-Check -Name 'Patched app.asar matches build metadata' -Passed (
         $manifestPatchedAsarHash -and $destinationAsarHash -eq ([string]$manifestPatchedAsarHash).ToLowerInvariant()
     ) -Detail "actual=$destinationAsarHash expected=$manifestPatchedAsarHash"
@@ -1628,10 +1695,13 @@ try {
             $packageHashes = Get-JsonProperty -Object $packageManifest -Name 'hashes'
             $packageHashChecks = [ordered]@{
                 launcher        = $destinationLauncherHash
-                originalDesktop = $destinationRealDesktopHash
+                originalDesktop = $destinationOriginalDesktopHash
                 appAsar         = $destinationAsarHash
                 router          = $destinationMuxHash
                 originalCodex   = $destinationRealCodexHash
+            }
+            if ($destinationOriginalDesktop -ne $destinationRealDesktop) {
+                $packageHashChecks.Add('runtimeDesktop', $destinationRealDesktopHash)
             }
             $badPackageHashes = New-Object 'System.Collections.Generic.List[string]'
             foreach ($entry in $packageHashChecks.GetEnumerator()) {
@@ -1669,7 +1739,7 @@ try {
         Add-WarningMessage 'Authenticode validation was skipped; this result is not release evidence.'
     }
     elseif ($sourceApp) {
-        Test-SignaturePair -Source $sourceDesktop -Destination $destinationRealDesktop -Name 'Official ChatGPT Authenticode signature is preserved'
+        Test-SignaturePair -Source $sourceDesktop -Destination $destinationOriginalDesktop -Name 'Official ChatGPT Authenticode signature is preserved'
         Test-SignaturePair -Source $sourceCodex -Destination $destinationRealCodex -Name 'Official Codex Authenticode signature is preserved'
         Test-SignaturePair -Source (Join-Path $sourceApp 'Codex.exe') -Destination (Join-Path $destinationApp 'Codex.exe') -Name 'Official desktop shim signature is preserved'
         if ((Test-Path -LiteralPath $sourceWindowsAccount -PathType Leaf) -and
@@ -1684,7 +1754,7 @@ try {
     }
     else {
         $signerThumbprint = [string](Get-JsonProperty -Object $manifest -Name 'sourceSignerThumbprint')
-        Test-PreservedOfficialSignature -Path $destinationRealDesktop -ExpectedHash $sourceDesktopHash -ExpectedThumbprint $signerThumbprint -Name 'Historical official ChatGPT signature is preserved'
+        Test-PreservedOfficialSignature -Path $destinationOriginalDesktop -ExpectedHash $sourceDesktopHash -ExpectedThumbprint $signerThumbprint -Name 'Historical official ChatGPT signature is preserved'
         Test-PreservedOfficialSignature -Path $destinationRealCodex -ExpectedHash $sourceCodexHash -ExpectedThumbprint $signerThumbprint -Name 'Historical official Codex signature is preserved'
         Test-PreservedOfficialSignature -Path (Join-Path $destinationApp 'Codex.exe') -ExpectedHash ([string](Get-JsonProperty -Object $manifest -Name 'sourceCodexLauncherSha256')) -ExpectedThumbprint $signerThumbprint -Name 'Historical official desktop shim signature is preserved'
         Test-PreservedOfficialSignature -Path $destinationWindowsAccount -ExpectedHash ([string](Get-JsonProperty -Object $manifest -Name 'sourceWindowsAccountSha256')) -ExpectedThumbprint $signerThumbprint -Name 'Historical official windows-account.node signature is preserved'

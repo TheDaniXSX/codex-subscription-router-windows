@@ -1475,6 +1475,26 @@ def swap_executables(staged_app: Path, mux: Path, launcher: Path) -> None:
             raise RuntimeError(f"{label} is not a PE executable after staging: {path}")
 
 
+def rebind_desktop_integrity(staged_app: Path, source_app: Path) -> dict[str, object]:
+    """Preserve signed provenance and update only Electron's expected ASAR hash."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "windows_asar_integrity", PROJECT_ROOT / "scripts" / "windows_asar_integrity.py"
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load desktop integrity support")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    original = staged_app / "ChatGPT.original.exe"
+    if original.exists():
+        raise RuntimeError("staging already contains an original desktop backup")
+    shutil.copy2(source_app / "ChatGPT.exe", original)
+    return module.patch_desktop_integrity(
+        original, staged_app / "ChatGPT.real.exe", staged_app / "resources" / "app.asar",
+        source_app / "resources" / "app.asar",
+    )
+
+
 def verify_preserved_windows_resources(source_app: Path, staged_app: Path) -> dict[str, object]:
     source_resources = source_app / "resources"
     staged_resources = staged_app / "resources"
@@ -1728,7 +1748,13 @@ def patch_app(
         unpacked = repack_asar(asar, extracted, repacked, official_unpacked_files)
         install_repacked_asar(staged_app, repacked, unpacked)
         swap_executables(staged_app, mux, launcher)
+        desktop_integrity = (
+            rebind_desktop_integrity(staged_app, source.app_root)
+            if _is_split_renderer(extracted) else None
+        )
         preservation = verify_preserved_windows_resources(source.app_root, staged_app)
+        if desktop_integrity is not None:
+            preservation["desktopIntegrity"] = desktop_integrity
         planned_backup = (
             plan_backup_path(destination) if destination.exists() and not dry_run else None
         )

@@ -277,6 +277,68 @@ $script:Checks.ToArray() | ConvertTo-Json -Compress
         after = json.loads(self._inventory().stdout)["preservedPayload"]["treeHash"]
         self.assertNotEqual(before, after)
 
+    def test_default_source_discovery_validates_direct_parent_package_identity(self) -> None:
+        build, _ = self._make_historical_build()
+        manifest_path = build / "app" / "codex-mux-build.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["sourcePath"] = str(self.package / "app")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        arguments = [
+            self.shell, "-NoProfile", "-NonInteractive", "-File", str(VERIFY_SCRIPT),
+            "-BuildPath", str(build), "-StateRoot", str(Path(self.temporary.name) / "state"),
+            "-SkipSmokeTest", "-SkipSignatureValidation", "-SkipAclValidation",
+        ]
+
+        def verify() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(arguments, cwd=REPOSITORY_ROOT, text=True, encoding="utf-8-sig", capture_output=True, check=False)
+
+        result = verify()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Live source package identity, architecture, and publisher are exact", result.stdout)
+        package_manifest = self.package / "AppxManifest.xml"
+        original_manifest = package_manifest.read_text(encoding="utf-8")
+        package_manifest.write_text(original_manifest.replace(PUBLISHER, "CN=Not OpenAI"), encoding="utf-8")
+        result = verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[FAIL] Live source package identity", result.stdout)
+        package_manifest.unlink()
+        result = verify()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("A loose app directory has no Appx identity", result.stdout)
+
+    def test_historical_verifier_authenticates_asar_bound_runtime_and_original(self) -> None:
+        from test_windows_asar_integrity import integrity, synthetic_pe
+
+        self._write("app/ChatGPT.exe", synthetic_pe("0" * 64))
+        self._write("app/chrome.dll", bytes(64) + integrity.FUSE_SENTINEL + b"\x01\x09010011001")
+        build, inventory = self._make_historical_build()
+        app = build / "app"
+        original = app / "ChatGPT.original.exe"
+        runtime = app / "ChatGPT.real.exe"
+        runtime.replace(original)
+        archive = app / "resources" / "app.asar"
+        source = original.read_bytes()
+        slot, _ = integrity.integrity_hash_slot(source)
+        runtime.write_bytes(source[:slot] + integrity.asar_header_sha256(archive).encode("ascii") + source[slot + 64:])
+        manifest_path = app / "codex-mux-build.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["preservation"]["desktopIntegrity"] = integrity.verify_desktop_integrity(original, runtime, archive)
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        arguments = [
+            self.shell, "-NoProfile", "-NonInteractive", "-File", str(VERIFY_SCRIPT),
+            "-BuildPath", str(build), "-StateRoot", str(Path(self.temporary.name) / "state"),
+            "-OfflineHistorical", "-SourceInventoryPath", str(inventory), "-SkipSmokeTest",
+            "-SkipSignatureValidation", "-SkipAclValidation",
+        ]
+        result = subprocess.run(arguments, cwd=REPOSITORY_ROOT, text=True, encoding="utf-8-sig", capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("exact resource-only modification are verified", result.stdout)
+        previous = runtime.read_bytes()
+        runtime.write_bytes(previous[:300] + bytes([previous[300] ^ 1]) + previous[301:])
+        result = subprocess.run(arguments, cwd=REPOSITORY_ROOT, text=True, encoding="utf-8-sig", capture_output=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("outside the authorized ASAR integrity hash", result.stdout + result.stderr)
+
     def test_historical_verifier_needs_no_live_windowsapps_package(self) -> None:
         build, inventory = self._make_historical_build()
         result = subprocess.run(

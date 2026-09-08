@@ -28,6 +28,14 @@ reset-query helpers remain in `app-initial`. The dedicated compatibility
 module patches both and preserves account management, profile/plugin/reset
 selection, thread attribution, runtime isolation, and the opt-in Appshots gate.
 
+This package also enforces Electron's embedded ASAR integrity check. The local
+runtime updates only the existing 64-character header digest in the named PE
+resource; integrity enforcement remains enabled. `ChatGPT.original.exe` preserves
+the signed official executable byte-for-byte. The modified `ChatGPT.real.exe` is
+not Authenticode-valid: verification checks its exact permitted difference from
+that original, its recorded hash, and its match to the patched ASAR header.
+The official Store installation and bundled CLI remain unchanged.
+
 The original release profile below remains supported. September changes are
 available from source; the historical release qualification is not a claim
 that all native capabilities have been manually requalified on every machine.
