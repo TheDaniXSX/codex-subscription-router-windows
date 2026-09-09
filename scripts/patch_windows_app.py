@@ -1507,7 +1507,18 @@ def swap_executables(staged_app: Path, mux: Path, launcher: Path) -> None:
             raise RuntimeError(f"{label} is not a PE executable after staging: {path}")
 
 
-def rebind_desktop_integrity(staged_app: Path, source_app: Path) -> dict[str, object]:
+def rebind_desktop_integrity(staged_app: Path, source_app: Path) -> dict[str, object] | None:
+    # The reviewed 26.903 source ships without an embedded ASAR resource and
+    # with different upstream fuse states. Preserve its signed binaries exactly;
+    # never manufacture a resource or toggle a fuse to make a patch load.
+    latest = TESTED_SOURCE_BUILDS["26.903.8094.0"]
+    if sha256_file(source_app / "ChatGPT.exe") == latest["chatgpt_sha256"]:
+        chrome_hash = "c2fb95027940a26eac4bd541a0cde66d0591af67e0f3c4efdb30e5ec6c98cd76"
+        if (sha256_file(source_app / "chrome.dll") != chrome_hash or
+                sha256_file(staged_app / "chrome.dll") != chrome_hash or
+                sha256_file(staged_app / "ChatGPT.real.exe") != latest["chatgpt_sha256"]):
+            raise RuntimeError("26.903 signed runtime must remain byte-for-byte unchanged")
+        return None
     """Preserve signed provenance and update only Electron's expected ASAR hash."""
     import importlib.util
     spec = importlib.util.spec_from_file_location(

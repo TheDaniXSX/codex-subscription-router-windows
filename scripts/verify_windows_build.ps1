@@ -858,6 +858,11 @@ function Test-DesktopAsarIntegrity {
     )
     $preservation = Get-JsonProperty -Object $Manifest -Name 'preservation'
     $declared = Get-JsonProperty -Object $preservation -Name 'desktopIntegrity'
+    if ((Get-JsonProperty -Object $Manifest -Name 'sourceVersion') -eq '26.903.8094.0') {
+        $expectedChrome = 'c2fb95027940a26eac4bd541a0cde66d0591af67e0f3c4efdb30e5ec6c98cd76'
+        $actualChrome = (Get-FileHash -LiteralPath (Join-Path $DestinationAppRoot 'chrome.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+        Add-Check -Name '26.903 original runtime and upstream fuse states are preserved' -Passed ($actualChrome -eq $expectedChrome -and $null -eq $declared) -Detail 'This source has no embedded ASAR resource; chrome.dll must match its reviewed original hash, without fuse edits'
+    }
     if ($null -eq $declared) { return }
     try {
         $python = Get-Command python -ErrorAction Stop

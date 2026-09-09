@@ -3,11 +3,21 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from test_patch_windows_app import patcher
 
 
 class September903Tests(unittest.TestCase):
+    def test_signed_runtime_is_preserved_without_resource_rebinding(self):
+        desktop = patcher.TESTED_SOURCE_BUILDS['26.903.8094.0']['chatgpt_sha256']
+        chrome = 'c2fb95027940a26eac4bd541a0cde66d0591af67e0f3c4efdb30e5ec6c98cd76'
+        with mock.patch.object(patcher, 'sha256_file', side_effect=[desktop, chrome, chrome, desktop]):
+            self.assertIsNone(patcher.rebind_desktop_integrity(Path('stage'), Path('source')))
+        with mock.patch.object(patcher, 'sha256_file', side_effect=[desktop, chrome, 'changed']):
+            with self.assertRaisesRegex(RuntimeError, 'byte-for-byte'):
+                patcher.rebind_desktop_integrity(Path('stage'), Path('source'))
+
     def test_exact_fingerprint_required(self):
         expected = patcher.TESTED_SOURCE_BUILDS['26.903.8094.0']
         source = SimpleNamespace(package_version='26.903.8094.0', **expected)

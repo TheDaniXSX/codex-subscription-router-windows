@@ -24,7 +24,11 @@ The dedicated `windows_renderer_26903.py` profile adapts the renamed bindings an
 restructured task-summary section, preserving the account selector and all prior
 router components. The patcher pins every source hash, validates unique anchors,
 retains the native-host isolation, and keeps Appshots opt-in. It does not disable
-Electron integrity enforcement. Tests on the actual payload covered renderer
+Electron integrity enforcement. Unlike 26.901, the original 26.903 executable
+ships without `INTEGRITY/ELECTRONASAR` and its original fuse wire is `101100011`.
+This profile therefore preserves both signed `ChatGPT.real.exe` and `chrome.dll`
+byte-for-byte instead of rebinding a nonexistent resource. The runtime DLL is
+checked against the reviewed SHA-256; no fuse is changed. Tests on the actual payload covered renderer
 syntax, native subagent continuations and two real Astra requests changing the
 spending subscription in one task. Visual interaction still requires manual review.
 

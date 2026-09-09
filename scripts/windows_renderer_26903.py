@@ -90,4 +90,3 @@ def patch_renderer(extracted: Path, token: str, control_port: int) -> None:
     thread = replace(thread, anchor, component + "\n" + anchor)
     thread = replace(thread, "children:[w,p,T,E,C,D]", "children:[w,p,T,E,(0,cE.jsx)(CodexMuxThreadSubscription,{}),C,D]")
     thread_path.write_text(thread, encoding="utf-8")
-
