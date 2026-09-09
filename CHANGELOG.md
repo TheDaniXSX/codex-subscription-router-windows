@@ -5,6 +5,12 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the 26.903 profile-menu crash (React error 130): resolve the menu item
+  from native usage instead of confusing it with a minified keyboard-map alias.
+  Validate the packed menu and expanded routing selector before installation.
+
 ### Added
 
 - Reviewed Windows package `26.903.8094.0` (desktop `26.903.61454`, build

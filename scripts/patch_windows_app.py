@@ -1789,6 +1789,12 @@ def patch_app(
             tree_file_hashes(staged_app / "resources" / "app.asar.unpacked").keys()
         )
         unpacked = repack_asar(asar, extracted, repacked, official_unpacked_files)
+        if source.asar_version == "26.903.61454":
+            node = shutil.which("node")
+            if node is None:
+                raise RuntimeError("Node.js is required to verify native profile menu bindings")
+            print("Verifying the packed profile menu and expanded routing selector…")
+            run([node, str(PROJECT_ROOT / "tests/windows/profile-menu-render.cjs"), str(repacked)])
         install_repacked_asar(staged_app, repacked, unpacked)
         swap_executables(staged_app, mux, launcher)
         desktop_integrity = (

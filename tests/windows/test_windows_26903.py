@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,17 @@ from test_patch_windows_app import patcher
 
 
 class September903Tests(unittest.TestCase):
+    def test_profile_item_binding_comes_from_native_menu_not_css_or_keyboard_map(self):
+        spec = importlib.util.spec_from_file_location('renderer26903', patcher.PROJECT_ROOT / 'scripts/windows_renderer_26903.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        native = '(0,dq.jsx)(Qy,{LeftIcon:CT,"aria-label":e,className:`opacity-50`,disabled:n,onSelect:r,children:f},`email`)'
+        self.assertEqual(module.account_menu_item_alias('const xl={};"text-xl";' + native), 'Qy')
+        with self.assertRaisesRegex(RuntimeError, 'found 0'):
+            module.account_menu_item_alias('const xl={};"text-xl";')
+        with self.assertRaisesRegex(RuntimeError, 'found 2'):
+            module.account_menu_item_alias(native + native)
+
     def test_signed_runtime_is_preserved_without_resource_rebinding(self):
         desktop = patcher.TESTED_SOURCE_BUILDS['26.903.8094.0']['chatgpt_sha256']
         chrome = 'c2fb95027940a26eac4bd541a0cde66d0591af67e0f3c4efdb30e5ec6c98cd76'

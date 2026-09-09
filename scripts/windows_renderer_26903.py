@@ -3,6 +3,20 @@ from pathlib import Path
 import re
 
 
+def account_menu_item_alias(primary: str) -> str:
+    # Bind to the component actually used by the native profile menu. Matching
+    # an identifier elsewhere (for example text-xl CSS) can select an unrelated
+    # object after minification and cause React error 130 when the menu opens.
+    matches = re.findall(
+        r'\(0,dq\.jsx\)\(([A-Za-z_$][\w$]*),\{LeftIcon:CT,"aria-label":e,'
+        r'className:`opacity-50`,disabled:n,onSelect:r,children:f\},`email`\)',
+        primary,
+    )
+    if len(matches) != 1:
+        raise RuntimeError(f"expected one native profile menu item binding, found {len(matches)}")
+    return matches[0]
+
+
 def patch_renderer(extracted: Path, token: str, control_port: int) -> None:
     assets = extracted / "webview" / "assets"
     root = Path(__file__).resolve().parent.parent
@@ -34,7 +48,7 @@ def patch_renderer(extracted: Path, token: str, control_port: int) -> None:
     component = (root / "ui" / "account-menu.js").read_text(encoding="utf-8")
     component = component.replace("__CODEX_MUX_CONTROL_PORT__", str(control_port)).replace("__CODEX_MUX_CONTROL_TOKEN__", token)
     component = remap(component, {"e7": "dq", "kXc": "Pyn", "QLs": "tG", "Lo": "fo",
-                                 "Q": "HE", "BW": "Zv", "_H": "xl", "CH": "of",
+                                 "Q": "HE", "BW": "Zv", "_H": account_menu_item_alias(primary), "CH": "of",
                                  "jLa": "uB", "S2": "MG"})
     for old, new in {"list-apps": "app/list", "list-installed-apps": "app/installed",
                      "read-apps": "app/read", "list-mcp-server-status": "mcpServerStatus/list",
