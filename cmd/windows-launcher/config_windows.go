@@ -531,6 +531,7 @@ func childEnvironment(environment []string, plan launchPlan) []string {
 		"CODEX_ELECTRON_USER_DATA_PATH": plan.Profile,
 		"CODEX_CLI_PATH":                plan.Mux,
 		"CODEX_MUX_REAL_CODEX":          plan.RealCodex,
+		"CODEX_MUX_REQUEST_SPENDING":    "1",
 		"CODEX_SPARKLE_ENABLED":         "false",
 		controlPortEnvironment:          strconv.Itoa(plan.ControlPort),
 		appshotsEnvironment:             appshots,

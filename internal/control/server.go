@@ -32,6 +32,17 @@ func New(address, token string, multiplexer *mux.Multiplexer, uiTests bool) *Ser
 	router.HandleFunc("/v1/health", server.health)
 	router.HandleFunc("/v1/accounts", server.accounts)
 	router.HandleFunc("/v1/routing-mode", server.routingMode)
+	router.HandleFunc("/v1/spending", func(w http.ResponseWriter, r *http.Request) {
+		if !server.authorized(r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		writeJSON(w, http.StatusOK, server.mux.SpendingStatus())
+	})
 	router.HandleFunc("/v1/accounts/", server.accountAction)
 	router.HandleFunc("/v1/thread-account", server.threadAccount)
 	router.HandleFunc("/v1/profile/combined", server.combinedProfile)
@@ -173,7 +184,7 @@ func (s *Server) accounts(response http.ResponseWriter, request *http.Request) {
 	case http.MethodGet:
 		ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
 		defer cancel()
-		writeJSON(response, http.StatusOK, map[string]any{"accounts": s.mux.Accounts(ctx), "routingMode": s.mux.RoutingMode()})
+		writeJSON(response, http.StatusOK, map[string]any{"accounts": s.mux.Accounts(ctx), "routingMode": s.mux.RoutingMode(), "spending": s.mux.SpendingStatus()})
 	case http.MethodPost:
 		var input struct {
 			Label string `json:"label"`

@@ -42,6 +42,19 @@ function harness({ fetch = async () => { throw Error("Unexpected request"); } } 
 const event = { preventDefault() {} };
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
+test("per-inference mode exposes strict spending and the actual last account", () => {
+  const h = harness();
+  h.render();
+  h.values[8] = { mode: "account", accountId: "primary" };
+  h.values[9] = { enabled: true, records: [{ accountId: "second", subagent: true, outcome: "completed" }] };
+  const rows = h.render();
+  assert.match(h.trigger(rows).props.SubText, /Every new inference/);
+  assert.ok(JSON.stringify(rows).includes("Last inference: "));
+  assert.ok(JSON.stringify(rows).includes("Second"));
+  h.trigger(rows).props.onSelect(event);
+  assert.match(h.options(h.render())[1].props.SubText, /no fallback/);
+});
+
 test("selector starts collapsed and exposes Auto plus every subscription without managing it", () => {
   const h = harness();
   const rows = h.render();

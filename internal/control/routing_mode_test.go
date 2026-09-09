@@ -52,3 +52,21 @@ func TestRoutingModeEndpoint(t *testing.T) {
 		t.Fatal("foreign origin changed mode")
 	}
 }
+
+func TestSpendingEndpointRequiresAuthentication(t *testing.T) {
+	server, _ := newAccountActionTestServer(t)
+	for _, tc := range []struct {
+		method, token string
+		status        int
+	}{
+		{"GET", "", 401}, {"GET", "secret", 200}, {"POST", "secret", 405},
+	} {
+		r := httptest.NewRequest(tc.method, "/v1/spending", nil)
+		r.Header.Set("X-Codex-Mux-Token", tc.token)
+		w := httptest.NewRecorder()
+		server.http.Handler.ServeHTTP(w, r)
+		if w.Code != tc.status {
+			t.Fatalf("got %d want %d", w.Code, tc.status)
+		}
+	}
+}

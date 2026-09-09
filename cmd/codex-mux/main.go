@@ -85,11 +85,12 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	defer cancel()
 	multiplexer, err := mux.New(mux.Options{
-		RealExecutable: realExecutable,
-		RealArgs:       args,
-		Environment:    os.Environ(),
-		Store:          store,
-		Output:         os.Stdout,
+		RealExecutable:  realExecutable,
+		RealArgs:        args,
+		Environment:     os.Environ(),
+		Store:           store,
+		Output:          os.Stdout,
+		RequestSpending: os.Getenv("CODEX_MUX_REQUEST_SPENDING") == "1",
 	})
 	if err != nil {
 		return err

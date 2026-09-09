@@ -5,6 +5,8 @@ import "github.com/TheDaniXSX/codex-subscription-router-windows/internal/state"
 func (m *Multiplexer) RoutingMode() state.RoutingMode { return m.store.RoutingMode() }
 
 func (m *Multiplexer) SetRoutingMode(mode state.RoutingMode) error {
+	m.spendingMutationMu.Lock()
+	defer m.spendingMutationMu.Unlock()
 	previous := m.RoutingMode()
 	if err := m.store.SetRoutingMode(mode); err != nil {
 		return err
@@ -14,6 +16,7 @@ func (m *Multiplexer) SetRoutingMode(mode state.RoutingMode) error {
 }
 
 func (m *Multiplexer) publishRoutingModeChange(previous state.RoutingMode) {
+	m.updateSpendMode()
 	mode := m.RoutingMode()
 	if previous != mode {
 		m.publish(Event{Type: "routing-mode-updated", AccountID: mode.AccountID})

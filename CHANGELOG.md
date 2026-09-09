@@ -7,6 +7,12 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Windows per-inference spending gateway: strict selected-account billing,
+  expiry/load-aware Auto, existing histories and native subagent continuations,
+  bounded sanitized decision history and authenticated status endpoint.
+- Override the previous new-chat preference/fallback semantics in the updated
+  Windows launcher; retain legacy behavior for non-opted-in CLI integrations.
+
 - Added a persistent Auto/preferred-subscription selector to the profile menu,
   with automatic fallback, existing-chat affinity, keyboard navigation, and
   authenticated local configuration synchronized across windows.

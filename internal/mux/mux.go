@@ -16,6 +16,7 @@ import (
 
 	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/backend"
 	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/protocol"
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/spend"
 	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/state"
 )
 
@@ -37,7 +38,8 @@ type Options struct {
 	Output         io.Writer
 	// RequestTimeout defaults to 30 seconds. A shorter value is useful for
 	// deterministic integration tests and constrained hosts.
-	RequestTimeout time.Duration
+	RequestTimeout  time.Duration
+	RequestSpending bool
 }
 
 type externalRoute struct {
@@ -122,8 +124,20 @@ type Multiplexer struct {
 	previewMu        sync.RWMutex
 	rateLimitPreview *RateLimitPreview
 
-	resetPreviewMu sync.RWMutex
-	resetPreviews  map[string]ResetCreditsPreview
+	resetPreviewMu     sync.RWMutex
+	resetPreviews      map[string]ResetCreditsPreview
+	requestSpending    bool
+	spendingMutationMu sync.Mutex
+	spendPolicy        *spend.Policy
+	spendServer        *http.Server
+	spendTransport     http.RoundTripper
+	spendToken         string
+	spendURL           string
+	spendCacheMu       sync.Mutex
+	spendCache         []spend.Candidate
+	spendCacheAt       time.Time
+	spendRecordsMu     sync.Mutex
+	spendRecords       []spend.Record
 }
 
 type threadLock struct {
@@ -159,6 +173,8 @@ func New(options Options) (*Multiplexer, error) {
 		resetCreditsCache:    make(map[string]resetCreditsCacheEntry),
 		resetCreditsEndpoint: rateLimitResetCreditsURL,
 		resetPreviews:        make(map[string]ResetCreditsPreview),
+		requestSpending:      options.RequestSpending,
+		spendPolicy:          spend.New(5 * time.Second),
 	}, nil
 }
 
@@ -175,6 +191,12 @@ func (m *Multiplexer) Start(ctx context.Context) error {
 	runCtx := m.runCtx
 	m.lifecycleMu.Unlock()
 
+	if m.requestSpending {
+		if err := m.startSpendGateway(); err != nil {
+			m.runCancel()
+			return err
+		}
+	}
 	accounts := m.store.Accounts()
 	startErrors := m.forEachAccountBounded(runCtx, accounts, func(account state.Account) error {
 		if !account.Enabled {
@@ -191,6 +213,9 @@ func (m *Multiplexer) Start(ctx context.Context) error {
 	}
 	if len(m.childEntries()) == 0 {
 		m.runCancel()
+		if m.spendServer != nil {
+			_ = m.spendServer.Close()
+		}
 		m.lifecycleMu.Lock()
 		m.runCtx, m.runCancel = nil, nil
 		m.lifecycleMu.Unlock()
@@ -226,6 +251,9 @@ func (m *Multiplexer) Close() {
 		}
 		m.lifecycleMu.Unlock()
 
+		if m.spendServer != nil {
+			_ = m.spendServer.Close()
+		}
 		entries := m.childEntries()
 		m.expireAllRoutes()
 		m.childrenMu.Lock()
@@ -348,6 +376,18 @@ func (m *Multiplexer) routeNewThread(message protocol.Message) {
 }
 
 func (m *Multiplexer) routeNewThreadExcluding(ctx context.Context, message protocol.Message, excluded map[string]struct{}) {
+	if m.requestSpending {
+		// Storage identity is no longer a billing decision.
+		controller, ok := m.store.Controller()
+		if !ok {
+			m.write(protocol.Failure(message.ID, -32022, "no controller configured"))
+			return
+		}
+		if err := m.forward(controller.ID, message); err != nil {
+			m.write(protocol.Failure(message.ID, -32021, err.Error()))
+		}
+		return
+	}
 	account, reason, err := m.chooseAccountExcluding(ctx, excluded)
 	if err != nil {
 		if errors.Is(err, errNoSubscriptionCapacity) {
@@ -405,6 +445,7 @@ func (m *Multiplexer) forwardWithExclusions(accountID string, message protocol.M
 }
 
 func (m *Multiplexer) forwardRoute(accountID string, message protocol.Message, excluded map[string]struct{}, reason *RouteReason) error {
+	message.Params = m.bindSpendProvider(message.Method, message.Params)
 	if m.closing.Load() {
 		return errors.New("router is shutting down")
 	}
@@ -453,6 +494,12 @@ func (m *Multiplexer) routeAggregatedRateLimits(message protocol.Message) {
 }
 
 func (m *Multiplexer) routeTurnStart(message protocol.Message, threadID, ownerID string) {
+	if m.requestSpending {
+		if err := m.forward(ownerID, message); err != nil {
+			m.write(protocol.Failure(message.ID, -32023, err.Error()))
+		}
+		return
+	}
 	release := m.lockThread(threadID)
 	defer release()
 	if currentOwner, ok := m.store.ThreadOwner(threadID); ok {
@@ -586,7 +633,7 @@ func (m *Multiplexer) handleInbound(inbound backend.Inbound) {
 		}
 		m.externalMu.Unlock()
 		if ok {
-			if isUsageLimitResponse(message) {
+			if !m.requestSpending && isUsageLimitResponse(message) {
 				switch route.method {
 				case "thread/start":
 					m.publish(Event{Type: "thread-route-retrying", AccountID: inbound.AccountID, Message: "Selected subscription reported no capacity; trying another"})
@@ -837,8 +884,8 @@ func (m *Multiplexer) startChildLocked(ctx context.Context, account state.Accoun
 		account.ID,
 		account.CodexHome,
 		m.realExecutable,
-		m.realArgs,
-		m.environment,
+		m.spendArgs(),
+		m.spendEnvironment(),
 		m.inbound,
 	)
 	if err != nil {

@@ -155,6 +155,11 @@ func (m *Multiplexer) AddAccount(ctx context.Context, label string) (AccountSnap
 }
 
 func (m *Multiplexer) UpdateAccount(ctx context.Context, id string, label *string, enabled *bool) (AccountSnapshot, error) {
+	m.spendingMutationMu.Lock()
+	defer m.spendingMutationMu.Unlock()
+	if m.requestSpending && enabled != nil && !*enabled && m.RoutingMode().AccountID == id {
+		return AccountSnapshot{}, errors.New("choose Auto or another subscription before disabling the spending account")
+	}
 	previousMode := m.RoutingMode()
 	defer func() { m.publishRoutingModeChange(previousMode) }()
 	operation := m.childOperationLock(id)
@@ -193,6 +198,11 @@ func (m *Multiplexer) UpdateAccount(ctx context.Context, id string, label *strin
 }
 
 func (m *Multiplexer) DeleteAccount(ctx context.Context, id string) error {
+	m.spendingMutationMu.Lock()
+	defer m.spendingMutationMu.Unlock()
+	if m.requestSpending && m.RoutingMode().AccountID == id {
+		return errors.New("choose Auto or another subscription before deleting the spending account")
+	}
 	previousMode := m.RoutingMode()
 	defer func() { m.publishRoutingModeChange(previousMode) }()
 	operation := m.childOperationLock(id)

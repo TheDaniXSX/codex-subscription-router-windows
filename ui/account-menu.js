@@ -557,6 +557,7 @@ function CodexMuxAccountMenu() {
     codexMuxPendingLogin?.accountId || null,
   );
   const [routingMode, setRoutingMode] = kXc.useState({ mode: "auto" });
+  const [spending, setSpending] = kXc.useState({ enabled: false, records: [] });
   const [routingModeOpen, setRoutingModeOpen] = kXc.useState(false);
   const [routingRequestState] = kXc.useState(() => ({ revision: 0, saving: false, refreshPending: false }));
   const loginAccountId = login?.accountId || null;
@@ -572,6 +573,7 @@ function CodexMuxAccountMenu() {
       setAccounts(nextAccounts);
       if (!routingRequestState.saving && routingRevision === routingRequestState.revision) {
         setRoutingMode(result.routingMode || { mode: "auto" });
+        setSpending(result.spending || { enabled: false, records: [] });
       }
       setSelectedAccountId((current) =>
         nextAccounts.some((account) => account.id === current)
@@ -601,6 +603,10 @@ function CodexMuxAccountMenu() {
       onMessage: (event) => {
         try {
           const payload = JSON.parse(event.data);
+          if (payload.type === "inference-spent") {
+            setSpending((current) => ({ ...current, records: [...(current.records || []), payload.data].slice(-100) }));
+            return;
+          }
           if (payload.type === "routing-mode-updated") {
             if (routingRequestState.saving) routingRequestState.refreshPending = true;
             else void refresh();
@@ -682,7 +688,7 @@ function CodexMuxAccountMenu() {
       setRoutingModeOpen(false);
       setStatusMessage(nextMode.mode === "auto"
         ? "Automatic routing selected."
-        : "Preferred subscription saved for new chats and failover.");
+        : spending.enabled ? "Spending instruction saved for every new inference." : "Preferred subscription saved for new chats and failover.");
       document.querySelector('[data-codex-mux-action="routing-mode"]')?.focus();
     } catch (requestError) {
       setError(requestError?.message || "The routing mode could not be saved.");
@@ -891,8 +897,8 @@ function CodexMuxAccountMenu() {
   rows.push((0, e7.jsx)(_H, {
     LeftIcon: S2,
     SubText: routingMode.mode === "account"
-      ? "New chats prefer this subscription; Auto when unavailable"
-      : "Balances remaining usage and reset time",
+      ? spending.enabled ? "Every new inference; pauses when unavailable" : "New chats prefer this subscription; Auto when unavailable"
+      : spending.enabled ? "Chooses per inference, including subagents" : "Balances remaining usage and reset time",
     "data-codex-mux-action": "routing-mode",
     "aria-label": `Routing mode: ${routingLabel}`,
     "aria-expanded": routingModeOpen,
@@ -910,8 +916,17 @@ function CodexMuxAccountMenu() {
     }),
     children: busy === "routing-mode" ? "Saving routing mode…" : "Routing mode",
   }, "codex-mux-routing-mode"));
+  if (spending.enabled && spending.records?.length) {
+    const last = spending.records[spending.records.length - 1];
+    const account = accounts.find((candidate) => candidate.id === last.accountId);
+    rows.push((0, e7.jsxs)("div", {
+      className: "px-3 py-1 text-xs text-token-text-secondary",
+      "data-codex-mux-spending-status": true,
+      children: ["Last inference: ", account?.label || "Unknown subscription", last.subagent ? " · subagent" : "", last.outcome === "completed" ? " · completed" : " · " + last.outcome],
+    }, "codex-mux-last-spend"));
+  }
   if (routingModeOpen) {
-    const options = [{ mode: "auto", label: "Auto", description: "Balances usage and reset time" },
+    const options = [{ mode: "auto", label: "Auto", description: spending.enabled ? "Balances each inference and concurrent agents" : "Balances usage and reset time" },
       ...accounts.map((account) => {
         const state = codexMuxAccountStatus(account, loginAccountId);
         const exhausted = [account.rateLimits?.primary, account.rateLimits?.secondary]
@@ -920,9 +935,9 @@ function CodexMuxAccountMenu() {
           mode: "account", accountId: account.id, label: account.label,
           disabled: !account.enabled,
           description: !account.enabled ? "Disabled — enable to select"
-            : exhausted ? "Usage exhausted — Auto until quota resets"
-            : state.key !== "ready" ? `${state.label} — Auto while unavailable`
-            : "Prefer for new chats; Auto when unavailable",
+            : exhausted ? spending.enabled ? "Usage exhausted — spending paused" : "Usage exhausted — Auto until quota resets"
+            : state.key !== "ready" ? `${state.label} — ${spending.enabled ? "spending paused" : "Auto while unavailable"}`
+            : spending.enabled ? "Use for every inference; no fallback" : "Prefer for new chats; Auto when unavailable",
         };
       })];
     rows.push((0, e7.jsx)("div", {

@@ -29,15 +29,14 @@ the Windows port.
 
 ## Highlights
 
-- **Quota-aware routing.** New chats favour weekly allowance that will expire
-  sooner, with a bounded boost for accounts holding banked usage resets.
-- **Subscription selector.** Choose Auto or a preferred subscription in the
-  profile menu. The preferred subscription receives new chats while it has
-  capacity; routing falls back automatically when it is unavailable.
-- **Sticky conversations.** Once a thread is assigned, every follow-up returns
-  to the same subscription unless that subscription is depleted.
-- **Automatic failover.** A depleted thread continues through another account
-  with quota; if the whole pool is empty, the app shows one combined alert.
+- **Per-inference routing.** Auto re-evaluates quota, expiry and concurrent load
+  for each model request, including continuations and native subagents.
+- **Strict subscription selector.** Choose Auto or one spending subscription in
+  the profile menu. Explicit selection never silently falls back to another account.
+- **Stable conversation ownership.** History and plugins keep their owner while
+  model requests can use a different subscription. Existing tasks are supported.
+- **Safe failures.** Unavailable selected accounts stop new spending; uncertain
+  requests are not automatically retried on another identity.
 - **Native account management.** The profile-menu implementation covers pooled
   usage, masked identities, labels, enable/disable, logout, removal, recovery,
   and device-code sign-in. Its lifecycle contracts have synthetic coverage;
@@ -184,19 +183,28 @@ The subscription assigned to the current thread appears in its pinned summary.
 
 Open the profile menu, then expand **Routing mode** below **Usage remaining**.
 Choose **Auto** to balance subscriptions, or select a subscription (including
-Primary) to spend its allowance first. The closed selector shows your saved mode.
+Primary) to spend only its allowance. The closed selector shows your saved mode.
 
-The choice takes effect for the next new chat and for failover decisions, without
-restarting the app. Existing chats keep their account and context until that
-account runs out of capacity. If the preferred subscription is exhausted or
-temporarily disconnected, other subscriptions can serve new work automatically;
-the preference remains saved and regains priority when it becomes available.
-The total usage summary still represents all enabled subscriptions.
+With the updated Windows launcher, the choice applies to every subsequent HTTP
+inference, including existing tasks, tool continuations and native subagents.
+Requests already dispatched keep their account. An exhausted/disconnected selected
+account stops new requests instead of consuming another account. Auto chooses
+again at each request using short/weekly capacity, expiry and in-flight load.
+Quota snapshots are cached for up to two seconds; exact future token cost is unknown.
+The total usage summary still represents all enabled subscriptions. **Last inference**
+shows the account of the last finished request, not the owner of the conversation.
 
-Selection does not enable or disable accounts. Removing or disabling the selected
-subscription returns the mode to Auto. Renaming it preserves the selection.
+Selection does not enable or disable accounts. Choose another mode before removing
+or disabling the selected spending account. Renaming it preserves the selection.
 The preference survives restarts in a private `routing-mode.json` alongside
 `state.json`; older router versions ignore this separate file during rollback.
+
+The request transport has been qualified with CLI 0.153.4 / Astra. It uses full-history
+HTTP requests; unsupported server-side continuation handles fail closed. Model-specific
+quota buckets and other models still need additional qualification. External clients
+or scripts that bypass the router are not controlled. See
+[transport and validation details](docs/PER-REQUEST-SPENDING.md). Installing this
+change requires closing the old router once; later mode changes do not require restarting.
 
 ## Profiles, plugins, and resets
 
