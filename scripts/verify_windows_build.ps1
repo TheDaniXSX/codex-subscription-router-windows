@@ -1360,6 +1360,15 @@ function Test-AsarArchive {
         # the native-host guard, or accept a partially upgraded payload.
         $isolationProfiles = @(
             @{
+                Name = '26.903'
+                Markers = @(
+                    'function MZ(e){return}',
+                    'function NZ(e){return}',
+                    'function GX(e){if(process.platform===`win32`)return process.env.CODEX_MUX_HOME?[(0,i.join)(process.env.CODEX_MUX_HOME,iX)]:[];',
+                    'case`win32`:return(0,i.join)(process.env.CODEX_MUX_HOME??(0,i.join)(process.env.LOCALAPPDATA??(0,i.join)(r.default.homedir(),`AppData`,`Local`),`Codex Subscription Router`),iX);'
+                )
+            },
+            @{
                 Name = '26.820'
                 Markers = @(
                     'function oY(e){return}',
@@ -1395,6 +1404,9 @@ function Test-AsarArchive {
         }
 
         $activeOfficialAnchors = @(
+            'function MZ(e){if(process.platform!==`win32`)return;',
+            'function NZ(e){let t=e.manifestPath;process.platform!==`win32`',
+            'case`win32`:return Ob(`windows`).map',
             'function oY(e){if(process.platform!==`win32`)return;',
             'function sY(e){let t=e.manifestPath;process.platform!==`win32`',
             'case`win32`:return Fy(`windows`).map',

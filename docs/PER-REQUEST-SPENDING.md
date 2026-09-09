@@ -39,6 +39,11 @@ upstream between checking and sending. No automatic cross-account retry is made.
 
 ## Validation and limits
 
+The 26.903.8094.0 package's CLI (also reporting 0.153.4, different executable
+hash) passed the same two-account real inference and native synthetic-subagent
+tests on 2026-09-09. Renderer syntax and all patch anchors were checked on its
+actual extracted payload; this does not substitute for manual visual review.
+
 On 2026-09-09, native CLI 0.153.4 was exercised with two private, temporary copies
 of the user's authorized subscription credentials. Two small Astra inferences in
 one native task used first Primary and then the selected second subscription.

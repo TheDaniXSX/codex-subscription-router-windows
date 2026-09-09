@@ -48,6 +48,19 @@ DEFAULT_STATE_ROOT = (
 # version/build are recorded separately because OpenAI currently ships them at
 # different version numbers.
 TESTED_SOURCE_BUILDS: dict[str, dict[str, str]] = {
+    "26.903.8094.0": {
+        "asar_version": "26.903.61454",
+        "asar_build": "8378",
+        "asar_sha256": "3b8e61c9b7afefeda3166f251270724a138af15eb947b7c3907691a695bce66c",
+        "codex_sha256": "ccdc9eb9dd71fbcfb03ad42c4eca2b0d6ff6fbd32ebe9416550e6244561e559b",
+        "chatgpt_sha256": "23796d3d11d19cd4cc0aef5b00b33f362cdcda98aa82607c27b9011f3c8e095f",
+        "codex_launcher_sha256": "aef54618342d6bb03fde9bc2dceed50d31119f74d2523039b2e0bc2e27e1c4ba",
+        "windows_account_sha256": "57c9d406a7ca0e714fae5ed24448d0de70541d44f846558b44b88dcf7654b748",
+        "cua_tree_sha256": "fffa9aa0d0f9f9dd5bd19cd6061b35ace1a68a44956996f9d4334ef2ad72d4df",
+        "cua_node_version": "24.20.0",
+        "cua_runtime_version": "0.0.11/20260902191201-81d486bd9181",
+        "cua_package_version": "0.2.4",
+    },
     "26.901.6511.0": {
         "asar_version": "26.901.51231",
         "asar_build": "8109",
@@ -879,11 +892,19 @@ def _is_split_renderer(extracted: Path) -> bool:
     return any((extracted / "webview" / "assets").glob("app-primary-*.js"))
 
 
+def _is_26903(extracted: Path) -> bool:
+    package = extracted / "package.json"
+    return package.is_file() and json.loads(package.read_text(encoding="utf-8")).get("version") == "26.903.61454"
+
+
 def _native_anchor(extracted: Path, value: str) -> str:
     if not _is_split_renderer(extracted):
         return value
     mapping = {"oY": "LZ", "sY": "RZ", "jq": "cX", "Oq": "aX",
                "Fy": "Pb", "yJ": "XX", "bJ": "ZX", "Mq": "lX"}
+    if _is_26903(extracted):
+        mapping = {"oY": "MZ", "sY": "NZ", "jq": "rX", "Oq": "eX",
+                   "Fy": "Ob", "yJ": "GX", "bJ": "KX", "Mq": "iX"}
     return re.sub(r"[A-Za-z_$][\w$]*", lambda m: mapping.get(m[0], m[0]), value)
 
 
@@ -895,6 +916,8 @@ def patch_windows_runtime_paths(extracted: Path) -> None:
         "(0,i.join)((0,r.homedir)(),`AppData`,`Local`),...e)}"
     )
     runtime_name = "yL" if _is_split_renderer(extracted) else "fF"
+    if _is_26903(extracted):
+        runtime_name = "uL"
     runtime_anchor = runtime_anchor.replace("function fF(", f"function {runtime_name}(")
     matches = [path for path in source_files if runtime_anchor in path.read_text(encoding="utf-8")]
     if len(matches) != 1:
@@ -1074,6 +1097,9 @@ def patch_windows_appshots_gate(extracted: Path) -> None:
     if _is_split_renderer(extracted):
         bridge_anchor = "ae=v&&a.a.isInternal(t)?SIe(h):null,oe=new dIe"
         bridge_replacement = 'ae=v&&(a.a.isInternal(t)||process.env.CODEX_ROUTER_ENABLE_APPSHOTS==="1")?SIe(h):null,oe=new dIe'
+    if _is_26903(extracted):
+        bridge_anchor = bridge_anchor.replace("a.a.", "a.i.").replace("SIe", "RIe").replace("dIe", "DIe")
+        bridge_replacement = bridge_replacement.replace("a.a.", "a.i.").replace("SIe", "RIe").replace("dIe", "DIe")
     text = replace_unique(
         text,
         bridge_anchor,
@@ -1093,6 +1119,9 @@ def patch_windows_appshots_gate(extracted: Path) -> None:
     if _is_split_renderer(extracted):
         feature_anchor = "let n=U(),r=n.skysight,o=Or(e);I&&B.windowsCaptureNativeBridge==null&&(o.appshotsEnabled=!1),I&&!a.a.isInternal(c)&&(o.appshotsEnabled=!1),Be.setDesktopFeatureAvailability(o);"
         feature_replacement = 'let n=U(),r=n.skysight,o=Or(e);if(I&&process.env.CODEX_ROUTER_ENABLE_APPSHOTS==="1")o.appshotsEnabled=B.windowsCaptureNativeBridge!=null;else{I&&B.windowsCaptureNativeBridge==null&&(o.appshotsEnabled=!1),I&&!a.a.isInternal(c)&&(o.appshotsEnabled=!1)}Be.setDesktopFeatureAvailability(o);'
+    if _is_26903(extracted):
+        feature_anchor = feature_anchor.replace("Or(e)", "pr(e)").replace("I&&", "P&&").replace("a.a.", "a.i.")
+        feature_replacement = feature_replacement.replace("Or(e)", "pr(e)").replace("I&&", "P&&").replace("a.a.", "a.i.")
     text = replace_unique(
         text,
         feature_anchor,
@@ -1122,6 +1151,8 @@ def verify_windows_appshots_contract(extracted: Path) -> dict[str, object]:
     if _is_split_renderer(extracted):
         required = ("a.a.isInternal(t)||" + strict_gate,
                     "o.appshotsEnabled=B.windowsCaptureNativeBridge!=null")
+    if _is_26903(extracted):
+        required = tuple(marker.replace("a.a.", "a.i.") for marker in required)
     for marker in required:
         if marker not in text:
             raise RuntimeError(f"Appshots opt-in contract is missing {marker!r}")
@@ -1170,8 +1201,9 @@ def _prepare_account_component(token: str, control_port: int) -> str:
 def patch_windows_renderer(extracted: Path, token: str, control_port: int) -> None:
     if _is_split_renderer(extracted):
         import importlib.util
+        renderer_module = "windows_renderer_26903" if _is_26903(extracted) else "windows_renderer_26901"
         spec = importlib.util.spec_from_file_location(
-            "windows_renderer_26901", PROJECT_ROOT / "scripts" / "windows_renderer_26901.py"
+            renderer_module, PROJECT_ROOT / "scripts" / f"{renderer_module}.py"
         )
         if spec is None or spec.loader is None:
             raise RuntimeError("could not load the split renderer compatibility module")

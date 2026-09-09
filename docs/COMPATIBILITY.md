@@ -7,7 +7,28 @@ publishing a destination if any expectation differs.
 
 ## Release 0.2.0
 
-### Current source checkout (September update)
+### Current source checkout (September 9 update)
+
+Additional patch profile: `windows-26.903.8094.0-x64-r1`.
+
+| Component | Reviewed value |
+| --- | --- |
+| Official package | `OpenAI.Codex_26.903.8094.0_x64__2p2nqsd0c76g0` |
+| Internal desktop version/build | `26.903.61454` / `8378` |
+| Bundled CLI | `0.153.4` (new executable hash) |
+| Original `app.asar` SHA-256 | `3b8e61c9b7afefeda3166f251270724a138af15eb947b7c3907691a695bce66c` |
+| Original `codex.exe` SHA-256 | `ccdc9eb9dd71fbcfb03ad42c4eca2b0d6ff6fbd32ebe9416550e6244561e559b` |
+| Computer Use Node/package | `24.20.0` / `0.2.4` |
+
+The dedicated `windows_renderer_26903.py` profile adapts the renamed bindings and
+restructured task-summary section, preserving the account selector and all prior
+router components. The patcher pins every source hash, validates unique anchors,
+retains the native-host isolation, and keeps Appshots opt-in. It does not disable
+Electron integrity enforcement. Tests on the actual payload covered renderer
+syntax, native subagent continuations and two real Astra requests changing the
+spending subscription in one task. Visual interaction still requires manual review.
+
+### Previous source checkout (September 8 update)
 
 Additional patch profile: `windows-26.901.6511.0-x64-r1`.
 

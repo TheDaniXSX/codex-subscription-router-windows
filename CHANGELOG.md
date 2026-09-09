@@ -7,6 +7,10 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Reviewed Windows package `26.903.8094.0` (desktop `26.903.61454`, build
+  `8378`, CLI `0.153.4`): dedicated renderer aliases, native-host isolation,
+  runtime-cache and Appshots gates, exact payload hashes and regression tests.
+
 - Windows per-inference spending gateway: strict selected-account billing,
   expiry/load-aware Auto, existing histories and native subagent continuations,
   bounded sanitized decision history and authenticated status endpoint.

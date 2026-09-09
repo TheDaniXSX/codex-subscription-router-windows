@@ -33,7 +33,7 @@ La versión más reciente revisada es:
 | Componente | Valor |
 | --- | --- |
 | Paquete | `OpenAI.Codex` |
-| Versión | `26.901.6511.0` |
+| Versión | `26.903.8094.0` |
 | Arquitectura | `x64` |
 | `app.asar` SHA-256 | `e75bae2b8a02f174c7ceeed6d631aaff355e44f8af5c798fa3628089f11d659e` |
 
