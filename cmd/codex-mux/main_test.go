@@ -2,6 +2,19 @@ package main
 
 import "testing"
 
+func TestAuxiliaryAppServerDoesNotStartAnotherRouter(t *testing.T) {
+	if hasRouterContext(func(string) (string, bool) { return "", false }) {
+		t.Fatal("plain auxiliary client must use the original app-server")
+	}
+	for _, key := range []string{"CODEX_MUX_HOME", "CODEX_MUX_STATE_ROOT", "CODEX_MUX_CONTROL_PORT", "CODEX_MUX_REQUEST_SPENDING"} {
+		for _, value := range []string{"", "configured"} {
+			if !hasRouterContext(func(k string) (string, bool) { return value, k == key }) {
+				t.Fatalf("partial router context %s must not bypass routing", key)
+			}
+		}
+	}
+}
+
 func TestInteractiveAppServerDetection(t *testing.T) {
 	tests := []struct {
 		args []string

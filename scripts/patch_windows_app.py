@@ -48,6 +48,19 @@ DEFAULT_STATE_ROOT = (
 # version/build are recorded separately because OpenAI currently ships them at
 # different version numbers.
 TESTED_SOURCE_BUILDS: dict[str, dict[str, str]] = {
+    "26.903.9818.0": {
+        "asar_version": "26.903.71938",
+        "asar_build": "8576",
+        "asar_sha256": "5d9b0399491060b2756fca70c2e5cca746fa8eb38372b7ad8f236dc69bda0bc6",
+        "codex_sha256": "3d6ca7085c932b62ef4ee4877e92f15b050fb94b2eb8e6c10a346a06248c6004",
+        "chatgpt_sha256": "49e7e8f5db0a4c8a12a666b70dac40e0e88a1873d02e8aafb82c3e8cabeca49c",
+        "codex_launcher_sha256": "0519bc74d05ed81332d314ea0b6e49063891daa34b8411b9ea38afda5bb5e8e3",
+        "windows_account_sha256": "a73a28de4bb8144b923b2dbbac19fedb89ad0f055cb52072b6bb63770836c643",
+        "cua_tree_sha256": "858c6eb3c0e82390ef6616ad61228a4d9f702d810be526908288ead808dc8388",
+        "cua_node_version": "24.20.0",
+        "cua_runtime_version": "0.0.11/20260902191201-81d486bd9181",
+        "cua_package_version": "0.2.4",
+    },
     "26.903.8094.0": {
         "asar_version": "26.903.61454",
         "asar_build": "8378",
@@ -894,7 +907,7 @@ def _is_split_renderer(extracted: Path) -> bool:
 
 def _is_26903(extracted: Path) -> bool:
     package = extracted / "package.json"
-    return package.is_file() and json.loads(package.read_text(encoding="utf-8")).get("version") == "26.903.61454"
+    return package.is_file() and json.loads(package.read_text(encoding="utf-8")).get("version") in {"26.903.61454", "26.903.71938"}
 
 
 def _native_anchor(extracted: Path, value: str) -> str:
@@ -1511,12 +1524,18 @@ def rebind_desktop_integrity(staged_app: Path, source_app: Path) -> dict[str, ob
     # The reviewed 26.903 source ships without an embedded ASAR resource and
     # with different upstream fuse states. Preserve its signed binaries exactly;
     # never manufacture a resource or toggle a fuse to make a patch load.
-    latest = TESTED_SOURCE_BUILDS["26.903.8094.0"]
-    if sha256_file(source_app / "ChatGPT.exe") == latest["chatgpt_sha256"]:
-        chrome_hash = "c2fb95027940a26eac4bd541a0cde66d0591af67e0f3c4efdb30e5ec6c98cd76"
+    signed_runtimes = {
+        TESTED_SOURCE_BUILDS["26.903.8094.0"]["chatgpt_sha256"]: "c2fb95027940a26eac4bd541a0cde66d0591af67e0f3c4efdb30e5ec6c98cd76",
+        # 26.903.9818.0: valid upstream signatures, no INTEGRITY resource,
+        # unchanged upstream fuse wire 0109313031313030303131.
+        "49e7e8f5db0a4c8a12a666b70dac40e0e88a1873d02e8aafb82c3e8cabeca49c": "633aa9957e5f0fdad1765be82afea60c414714b8c4ca72143ee9e064951f14f8",
+    }
+    desktop_hash = sha256_file(source_app / "ChatGPT.exe")
+    if desktop_hash in signed_runtimes:
+        chrome_hash = signed_runtimes[desktop_hash]
         if (sha256_file(source_app / "chrome.dll") != chrome_hash or
                 sha256_file(staged_app / "chrome.dll") != chrome_hash or
-                sha256_file(staged_app / "ChatGPT.real.exe") != latest["chatgpt_sha256"]):
+                sha256_file(staged_app / "ChatGPT.real.exe") != desktop_hash):
             raise RuntimeError("26.903 signed runtime must remain byte-for-byte unchanged")
         return None
     """Preserve signed provenance and update only Electron's expected ASAR hash."""
@@ -1789,7 +1808,7 @@ def patch_app(
             tree_file_hashes(staged_app / "resources" / "app.asar.unpacked").keys()
         )
         unpacked = repack_asar(asar, extracted, repacked, official_unpacked_files)
-        if source.asar_version == "26.903.61454":
+        if source.asar_version in {"26.903.61454", "26.903.71938"}:
             node = shutil.which("node")
             if node is None:
                 raise RuntimeError("Node.js is required to verify native profile menu bindings")

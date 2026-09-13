@@ -6,11 +6,14 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -37,6 +40,7 @@ type Record struct {
 	ThreadID       string `json:"threadId,omitempty"`
 	TurnID         string `json:"turnId,omitempty"`
 	Subagent       bool   `json:"subagent"`
+	FailureKind    string `json:"failureKind,omitempty"`
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -48,6 +52,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Header.Get("Origin") != "" || r.Header.Get("Upgrade") != "" {
 		gatewayError(w, 403, "browser and WebSocket traffic is not qualified")
+		return
+	}
+	if r.Method == "POST" && (r.URL.Path == "/v1/live" || r.URL.Path == "/v1/realtime/calls") {
+		g.createVoiceCall(w, r)
 		return
 	}
 	if r.Method == "GET" && r.URL.Path == "/v1/models" {
@@ -92,9 +100,18 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		gatewayError(w, 400, "background responses are not qualified")
 		return
 	}
+	capacityStarted := time.Now()
 	candidates, err := g.Candidates(r.Context())
+	// Only retry metadata timeouts, before credentials or inference are sent.
+	if errors.Is(err, context.DeadlineExceeded) && r.Context().Err() == nil {
+		candidates, err = g.Candidates(r.Context())
+	}
 	if err != nil {
-		gatewayError(w, 503, "cannot establish current subscription capacity")
+		kind := transportFailureKind(err)
+		if g.Observe != nil {
+			g.Observe(Record{Status: 503, Outcome: "not-sent", FailureKind: "capacity-" + kind, DurationMillis: time.Since(capacityStarted).Milliseconds()})
+		}
+		gatewayError(w, 503, "subscription capacity "+kind+"; inference not sent")
 		return
 	}
 	decision, release, err := g.Policy.Reserve(candidates)
@@ -148,7 +165,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	response, err := g.RoundTrip.RoundTrip(upstream)
 	if err != nil {
 		record.Outcome = "delivery-unknown"
-		gatewayError(w, 502, "inference delivery uncertain; not retried to avoid duplicate spending")
+		record.FailureKind = transportFailureKind(err)
+		gatewayError(w, 502, "inference "+record.FailureKind+"; delivery uncertain; not retried to avoid duplicate spending")
 		return
 	}
 	defer response.Body.Close()
@@ -203,14 +221,58 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if terminal != "" {
-			_, _ = w.Write([]byte("\n"))
-			_ = controller.Flush()
+			if _, err = w.Write([]byte("\n")); err != nil {
+				record.Outcome = "client-disconnected"
+				record.FailureKind = transportFailureKind(err)
+				return
+			}
+			if err = controller.Flush(); err != nil {
+				record.Outcome = "client-disconnected"
+				record.FailureKind = transportFailureKind(err)
+				return
+			}
 			record.Outcome = terminal
 			return
 		}
-		_ = controller.Flush()
+		if err = controller.Flush(); err != nil {
+			record.Outcome = "client-disconnected"
+			record.FailureKind = transportFailureKind(err)
+			return
+		}
 	}
 	record.Outcome = "stream-interrupted"
+	if err := scanner.Err(); err != nil {
+		record.FailureKind = "stream-" + transportFailureKind(err)
+	} else {
+		record.FailureKind = "stream-eof-before-terminal"
+	}
+}
+
+// Only bounded categories are exposed; raw network errors can contain secrets.
+func transportFailureKind(err error) string {
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return "unexpected-eof"
+	}
+	if errors.Is(err, syscall.ECONNRESET) {
+		return "connection-reset"
+	}
+	if errors.Is(err, syscall.ECONNABORTED) {
+		return "connection-aborted"
+	}
+	if errors.Is(err, syscall.EPIPE) {
+		return "broken-pipe"
+	}
+	if errors.Is(err, bufio.ErrTooLong) {
+		return "event-too-large"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	var networkError net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout()) {
+		return "timeout"
+	}
+	return "transport-error"
 }
 
 // Model discovery is not inference and keeps the caller's account identity.

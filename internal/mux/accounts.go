@@ -36,6 +36,7 @@ type RateLimits struct {
 }
 
 type AccountSnapshot struct {
+	observedAt      time.Time
 	ID              string          `json:"id"`
 	Label           string          `json:"label"`
 	Enabled         bool            `json:"enabled"`
@@ -69,8 +70,21 @@ func (m *Multiplexer) Accounts(ctx context.Context) []AccountSnapshot {
 	return m.accountSnapshots(ctx, true)
 }
 
-func (m *Multiplexer) accountSnapshots(ctx context.Context, includeProfile bool) []AccountSnapshot {
+func (m *Multiplexer) accountSnapshots(ctx context.Context, includeProfile bool, selected ...string) []AccountSnapshot {
 	accounts := m.store.Accounts()
+	if len(selected) > 0 && selected[0] != "" {
+		wanted := make(map[string]bool, len(selected))
+		for _, id := range selected {
+			wanted[id] = true
+		}
+		filtered := accounts[:0]
+		for _, account := range accounts {
+			if wanted[account.ID] {
+				filtered = append(filtered, account)
+			}
+		}
+		accounts = filtered
+	}
 	type indexedSnapshot struct {
 		index    int
 		snapshot AccountSnapshot
@@ -86,6 +100,7 @@ func (m *Multiplexer) accountSnapshots(ctx context.Context, includeProfile bool)
 			for index := range jobs {
 				account := accounts[index]
 				snapshot, err := m.accountSnapshotWithProfile(ctx, account.ID, includeProfile)
+				snapshot.observedAt = m.now()
 				if err != nil {
 					runtime := m.runtimeState(account.ID)
 					snapshot = AccountSnapshot{

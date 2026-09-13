@@ -45,7 +45,7 @@ func run() error {
 		return err
 	}
 	args := os.Args[1:]
-	if !isInteractiveAppServer(args) {
+	if !isInteractiveAppServer(args) || !hasRouterContext(os.LookupEnv) || isComputerUseAuxiliary(args) {
 		return passthrough(realExecutable, args)
 	}
 
@@ -133,6 +133,19 @@ func run() error {
 	}
 	cancel()
 	return scanner.Err()
+}
+
+// Auxiliary clients (including Computer Use) inherit CODEX_CLI_PATH but the
+// account backend deliberately strips router control variables. They need a
+// plain app-server, not another multiplexer. A partially configured launcher
+// must still fail closed rather than silently bypass subscription routing.
+func hasRouterContext(lookup func(string) (string, bool)) bool {
+	for _, key := range []string{"CODEX_MUX_HOME", "CODEX_MUX_STATE_ROOT", "CODEX_MUX_CONTROL_PORT", "CODEX_MUX_REQUEST_SPENDING"} {
+		if _, present := lookup(key); present {
+			return true
+		}
+	}
+	return false
 }
 
 func parseControlPort(value string) (int, error) {

@@ -11,6 +11,14 @@ async function main() {
   const initialPath = entries.find(p => /\/app-initial-[^/]+\.js$/.test(p));
   const primary = asar.extractFile(archive, primaryPath.replace(/^\//, '').split('/').join(path.sep)).toString();
   const initial = asar.extractFile(archive, initialPath.replace(/^\//, '').split('/').join(path.sep)).toString();
+  const updated = primary.includes('function Cbn(e){');
+  if (updated) {
+    assert.match(primary, /YG as Zy[,}]/);
+    const exported = initial.match(/([\w$]+) as YG[,}]/);
+    assert.ok(exported, 'native menu component export is present');
+    assert.ok(initial.includes(`function ${exported[1]}(e)`), 'menu binding resolves to a function');
+    assert.match(primary, /xK\.jsx\)\(Zy,\{LeftIcon:oT/);
+  } else {
   assert.match(primary, /GM as xl[,}]/);
   assert.match(initial, /xeo as GM[,}]/);
   assert.match(initial, /xeo=\(typeof navigator/); // Keybinding map, not a React component.
@@ -18,8 +26,9 @@ async function main() {
   assert.match(initial, /jea as YG[,}]/);
   assert.match(initial, /function jea\(e\)/);
   assert.match(primary, /dq\.jsx\)\(Qy,\{LeftIcon:CT/); // Native menu uses Qy.
+  }
   const start = primary.indexOf('const CODEX_MUX_API =');
-  const end = primary.indexOf('function kyn(e)', start);
+  const end = primary.indexOf(updated ? 'function Cbn(e)' : 'function kyn(e)', start);
   assert.ok(start >= 0 && end > start);
   const injected = primary.slice(start, end);
   function render(code, expanded = false) {
@@ -29,19 +38,21 @@ async function main() {
     };
     const values = [[{id:'primary', label:'Primary', enabled:true, connected:true, controller:true}], false, '', '', '', null, false, null, {mode:'account',accountId:'primary'}, {enabled:true,records:[]}, expanded];
     let index=0;
-    const c = vm.createContext({
+    const globals = {
       AbortController, TextDecoder, TextEncoder, setTimeout, clearTimeout, setInterval, clearInterval,
       document:{querySelector:()=>null}, fetch:()=>{throw Error('Network forbidden in this test');},
       dq:{jsx,jsxs:jsx,Fragment:'fragment'}, Zv:()=>{}, fo:()=>({}), HE:{}, MG:()=>{},
       xl:{'Ctrl-a':()=>{}}, Qy:()=>{}, of:{Separator:()=>{}},
       Pyn:{useState:initial=>{const n=index++;if(!(n in values))values[n]=typeof initial==='function'?initial():initial;return [values[n],()=>{}];},useCallback:f=>f,useEffect:()=>{}}
-    });
+    };
+    if (updated) Object.assign(globals, {xK:globals.dq, Obn:globals.Pyn, Hv:globals.Zv, Oe:globals.fo, zb:globals.HE, iG:globals.MG, Zy:globals.Qy, Rd:globals.of});
+    const c = vm.createContext(globals);
     vm.runInContext(code,c);
     return c.CodexMuxAccountMenu();
   }
   assert.doesNotThrow(()=>render(injected));
   assert.doesNotThrow(()=>render(injected, true));
-  assert.throws(()=>render(injected.replace(/\bQy\b/g,'xl')), /Invalid React element type: object/);
+  assert.throws(()=>render(injected.replace(updated ? /\bZy\b/g : /\bQy\b/g,'xl')), /Invalid React element type: object/);
   console.log('PASS: installed account menu and expanded routing selector accept native component bindings.');
   console.log('PASS: negative control reproduces React invalid-element-type with the old keybinding alias.');
 }

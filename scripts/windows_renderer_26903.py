@@ -1,14 +1,15 @@
 """Fail-closed renderer adaptation for the split 26.903 desktop bundles."""
 from pathlib import Path
 import re
+import json
 
 
-def account_menu_item_alias(primary: str) -> str:
+def account_menu_item_alias(primary: str, updated: bool = False) -> str:
     # Bind to the component actually used by the native profile menu. Matching
     # an identifier elsewhere (for example text-xl CSS) can select an unrelated
     # object after minification and cause React error 130 when the menu opens.
     matches = re.findall(
-        r'\(0,dq\.jsx\)\(([A-Za-z_$][\w$]*),\{LeftIcon:CT,"aria-label":e,'
+        (r'\(0,xK\.jsx\)\(([A-Za-z_$][\w$]*),\{LeftIcon:oT,"aria-label":e,' if updated else r'\(0,dq\.jsx\)\(([A-Za-z_$][\w$]*),\{LeftIcon:CT,"aria-label":e,') +
         r'className:`opacity-50`,disabled:n,onSelect:r,children:f\},`email`\)',
         primary,
     )
@@ -20,14 +21,42 @@ def account_menu_item_alias(primary: str) -> str:
 def patch_renderer(extracted: Path, token: str, control_port: int) -> None:
     assets = extracted / "webview" / "assets"
     root = Path(__file__).resolve().parent.parent
+    updated = json.loads((extracted / "package.json").read_text(encoding="utf-8"))["version"] == "26.903.71938"
+    stage = "primary"
+    aliases = {
+        "primary": {"dq":"xK", "Pyn":"Obn", "tG":"tfn", "fo":"Oe", "HE":"zb", "Zv":"Hv", "of":"Rd", "uB":"Qz", "MG":"iG", "kyn":"Cbn", "uq":"bK", "Rdn":"nfn", "Bdn":"ifn", "Adn":"qdn", "eG":"VW", "Eb":"bb"},
+        "initial": {"vO":"_O", "x5i":"j5i", "sb":"ob", "C5i":"N5i", "S5i":"M5i", "nD":"tD", "gb":"hb", "w5i":"P5i", "fb":"db", "eD":"$E", "T5i":"F5i", "s8i":"_8i", "yb":"vb"},
+        "profile": {"St":"xt", "xt":"bt", "M":"N"},
+        "thread": {"ve":"s", "ds":"ps", "De":"y"},
+    }
+
+    def translate(value: str) -> str:
+        if not updated:
+            return value
+        value = re.sub(r'''`(?:\\.|[^`])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[A-Za-z_$][\w$]*''', lambda m: aliases.get(stage, {}).get(m[0], m[0]), value)
+        if stage == "thread":
+            value = value.replace("onOpenSubagentsPanel:s}=e", "onOpenSubagentsPanel:c}=e")
+            value = value.replace("children:[w,p,T,E,C,D]", "children:[T,m,E,D,w,O]")
+            value = value.replace("children:[w,p,T,E,(0,cE.jsx)(CodexMuxThreadSubscription,{}),C,D]", "children:[T,m,E,D,(0,cE.jsx)(CodexMuxThreadSubscription,{}),w,O]")
+        return value
 
     def one(pattern: str, marker: str = "") -> Path:
+        marker = translate(marker)
         paths = [p for p in assets.glob(pattern) if marker in p.read_text(encoding="utf-8")]
         if len(paths) != 1:
             raise RuntimeError(f"expected one {pattern} bundle for {marker!r}, found {len(paths)}")
         return paths[0]
 
     def replace(text: str, old: str, new: str) -> str:
+        if new.startswith(("const CODEX_MUX_API =", "const CODEX_MUX_THREAD_API =")):
+            # Injected code has already had its explicit native bindings remapped.
+            # Only translate the trailing native anchor, never user strings/JS keywords.
+            if not new.endswith(old):
+                raise RuntimeError("injected component must precede its native anchor")
+            new = new[:-len(old)] + translate(old)
+        else:
+            new = translate(new)
+        old = translate(old)
         if text.count(old) != 1:
             raise RuntimeError(f"26.903 anchor count {text.count(old)}: {old[:120]}")
         return text.replace(old, new, 1)
@@ -35,6 +64,7 @@ def patch_renderer(extracted: Path, token: str, control_port: int) -> None:
     def remap(text: str, names: dict[str, str]) -> str:
         # These names are renderer aliases, not user strings or account identifiers.
         for old, new in names.items():
+            new = translate(new)
             text, count = re.subn(r"(?<![\w$])" + re.escape(old) + r"(?![\w$])", new, text)
             if not count:
                 raise RuntimeError(f"unused 26.903 component alias: {old}")
@@ -48,7 +78,7 @@ def patch_renderer(extracted: Path, token: str, control_port: int) -> None:
     component = (root / "ui" / "account-menu.js").read_text(encoding="utf-8")
     component = component.replace("__CODEX_MUX_CONTROL_PORT__", str(control_port)).replace("__CODEX_MUX_CONTROL_TOKEN__", token)
     component = remap(component, {"e7": "dq", "kXc": "Pyn", "QLs": "tG", "Lo": "fo",
-                                 "Q": "HE", "BW": "Zv", "_H": account_menu_item_alias(primary), "CH": "of",
+                                 "Q": "HE", "BW": "Zv", "_H": account_menu_item_alias(primary, updated), "CH": "of",
                                  "jLa": "uB", "S2": "MG"})
     for old, new in {"list-apps": "app/list", "list-installed-apps": "app/installed",
                      "read-apps": "app/read", "list-mcp-server-status": "mcpServerStatus/list",
@@ -74,6 +104,7 @@ def patch_renderer(extracted: Path, token: str, control_port: int) -> None:
         primary = replace(primary, f"defaultMessage:`{message}`", "defaultMessage:`All connected subscriptions are depleted`")
     primary_path.write_text(primary, encoding="utf-8")
 
+    stage = "initial"
     initial_path = one("app-initial-*.js")
     initial = initial_path.read_text(encoding="utf-8")
     anchor = "async sendRequest(e,t,n){if(this.dispatchMessage==null)throw Error(`AppServerRequestClient is missing a message dispatcher`);"
@@ -85,14 +116,17 @@ def patch_renderer(extracted: Path, token: str, control_port: int) -> None:
     initial = replace(initial, mutation, "function w5i(){let e=fb(),t=eD(),n=window.__codexMuxResetAccountId,r=[`rate-limit-reset-credits`,n??`primary`];return yb({mutationFn:n?i=>globalThis.codexMuxConsumeRateLimitReset(n,i):T5i,onSuccess:(n,i)=>{let{creditId:a}=i,o=n.code;if(o===`reset`||o===`already_redeemed`){let t=o===`reset`?n.credit?.id??a:a;e.setQueryData(r,e=>s8i(e,o,t))}Promise.all([t([`rate-limit-status`]),t(r)])}})}")
     initial_path.write_text(initial, encoding="utf-8")
 
+    stage = "profile"
     profile_path = one("profile-*.js", "className:`flex flex-col items-center`")
     profile = profile_path.read_text(encoding="utf-8")
     anchor = 'let St;t[91]!==yt||t[92]!==xt?(St=(0,$.jsx)(`section`,{"aria-busy":yt,className:`flex flex-col items-center`,children:xt}),t[91]=yt,t[92]=xt,t[93]=St):St=t[93];'
     profile = replace(profile, anchor, anchor.replace("children:xt", "children:globalThis.CodexMuxProfileAvatarStack?.({onSelect:()=>M.refetch()})??xt"))
     profile_path.write_text(profile, encoding="utf-8")
+    stage = "plugins"
     plugin_path = one("plugins-settings-*.js", "action:F,children:w})")
     plugin_path.write_text(replace(plugin_path.read_text(encoding="utf-8"), "action:F,children:w})", "action:F,children:[globalThis.CodexMuxPluginScope?.()??null,w]})"), encoding="utf-8")
 
+    stage = "thread"
     anchor = "function iE(e){let t=(0,sE.c)(37),{onForceShow:n,isVisible:r,registerEnvironmentActionCommands:i,onOpenBackgroundAgent:a,onOpenPullRequestSidePanel:o,onOpenSubagentsPanel:s}=e"
     thread_path = one("local-conversation-thread-*.js", anchor)
     thread = thread_path.read_text(encoding="utf-8")

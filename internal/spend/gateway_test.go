@@ -8,10 +8,46 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"syscall"
 	"testing"
 )
 
 type transport func(*http.Request) (*http.Response, error)
+
+func TestStreamFailureCategories(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		kind string
+	}{
+		{io.ErrUnexpectedEOF, "unexpected-eof"},
+		{syscall.ECONNRESET, "connection-reset"},
+		{syscall.ECONNABORTED, "connection-aborted"},
+		{syscall.EPIPE, "broken-pipe"},
+	} {
+		if got := transportFailureKind(tc.err); got != tc.kind {
+			t.Fatalf("got %s, want %s", got, tc.kind)
+		}
+	}
+}
+
+type failingFlushWriter struct{ *httptest.ResponseRecorder }
+
+func (w failingFlushWriter) FlushError() error { return io.ErrClosedPipe }
+
+func TestFailedTerminalFlushIsNotReportedCompleted(t *testing.T) {
+	g, _ := gatewayFixture()
+	g.RoundTrip = transport(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.completed\"}\n\n"))}, nil
+	})
+	var record Record
+	g.Observe = func(r Record) { record = r }
+	r := httptest.NewRequest("POST", "http://localhost/v1/responses", strings.NewReader(`{"input":[]}`))
+	r.Header.Set("Authorization", "Bearer "+g.Token)
+	g.ServeHTTP(failingFlushWriter{httptest.NewRecorder()}, r)
+	if record.Outcome != "client-disconnected" {
+		t.Fatal(record)
+	}
+}
 
 func (f transport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
@@ -63,6 +99,52 @@ func TestGatewayDoesNotRetryUncertainDelivery(t *testing.T) {
 	w := perform(g, `{"input":[]}`)
 	if w.Code != 502 || *count != 1 || record.Outcome != "delivery-unknown" || strings.Contains(w.Body.String(), "secret upstream") {
 		t.Fatal(w, record, *count)
+	}
+}
+
+func TestCapacityTimeoutRetriesOnlyMetadata(t *testing.T) {
+	g, count := gatewayFixture()
+	original := g.Candidates
+	reads := 0
+	g.Candidates = func(ctx context.Context) ([]Candidate, error) {
+		reads++
+		if reads == 1 {
+			return nil, context.DeadlineExceeded
+		}
+		return original(ctx)
+	}
+	if w := perform(g, `{"input":[]}`); w.Code != 200 || reads != 2 || *count != 1 {
+		t.Fatalf("status=%d reads=%d sends=%d", w.Code, reads, *count)
+	}
+}
+
+func TestCapacityFailureIsRecordedWithoutDispatch(t *testing.T) {
+	g, count := gatewayFixture()
+	reads := 0
+	var record Record
+	g.Observe = func(r Record) { record = r }
+	g.Candidates = func(context.Context) ([]Candidate, error) { reads++; return nil, context.DeadlineExceeded }
+	w := perform(g, `{"input":[]}`)
+	if w.Code != 503 || reads != 2 || *count != 0 || record.FailureKind != "capacity-timeout" || record.Outcome != "not-sent" {
+		t.Fatal(w, reads, *count, record)
+	}
+}
+
+func TestTransportDiagnosticsAreClassifiedAndNeverRetried(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		kind string
+	}{
+		{context.DeadlineExceeded, "timeout"}, {context.Canceled, "canceled"}, {errors.New("private credential detail"), "transport-error"},
+	} {
+		g, count := gatewayFixture()
+		var record Record
+		g.Observe = func(r Record) { record = r }
+		g.RoundTrip = transport(func(*http.Request) (*http.Response, error) { *count++; return nil, tc.err })
+		w := perform(g, `{"input":[]}`)
+		if w.Code != 502 || *count != 1 || record.FailureKind != tc.kind || strings.Contains(w.Body.String(), "private") {
+			t.Fatal(w, record, *count)
+		}
 	}
 }
 func TestGatewayDoesNotForwardCallerIdentity(t *testing.T) {

@@ -7,6 +7,44 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Preserve native `OpenAI-Alpha: quicksilver=v2` and voice session headers.
+  Real backend A/B reproduced the previous 400 and verified 201 through the
+  corrected gateway with a generated SDP offer, without microphone/audio.
+
+- Qualify Windows Codex 26.903.9818.0 (inner 26.903.71938, build 8576):
+  updated renderer bindings, profile refresh, thread subscription panel and
+  native profile-menu render contract. Preserve signed Electron binaries and
+  retain all capacity, voice setup and auxiliary app-server fixes.
+
+- Add authenticated native voice call setup translation from API multipart to
+  the ChatGPT subscription backend, retaining selected-account spending and
+  native direct WebRTC sideband. No automatic call replay after dispatch.
+  Record stream EOF separately from network/scanner errors.
+
+- Isolate strict spending capacity reads to the selected subscription. Auto
+  rechecks responsive accounts after a peer timeout without rejuvenating stale
+  quota. Capacity lock waits honor cancellation; cache entries are mode-specific.
+  Optional reset scoring uses cached metadata on the inference path. Retry a
+  capacity timeout once before dispatch and record sanitized pre-dispatch failures.
+
+- Timestamp capacity snapshots after refresh completion: slow account/reset
+  metadata reads no longer expire a fresh snapshot before its first reservation.
+  Increase inference response-header wait from 60s to 5 minutes and expose
+  sanitized timeout/cancellation/transport diagnostics without replaying uncertain
+  requests or silently changing a strict subscription selection.
+
+- Computer Use auxiliary app-server startup: invocations without router control
+  context pass through to the original CLI, instead of failing on a missing
+  control port. Partial router configurations still fail closed.
+  The bundled Windows CUA helper's bare app-server call is also recognized by
+  its exact parent executable path, since it inherits the desktop's router
+  context. This avoids the duplicate-instance lock without bypassing desktop
+  conversations or native subagent inference.
+
+- Added a backed-up, idempotent repair for opening router-provider histories
+  in the official app, without persisting gateway addresses or tokens. See
+  [provider compatibility](docs/PROVIDER-COMPATIBILITY.md).
+
 - Fixed the 26.903 profile-menu crash (React error 130): resolve the menu item
   from native usage instead of confusing it with a minified keyboard-map alias.
   Validate the packed menu and expanded routing selector before installation.

@@ -136,6 +136,7 @@ type Multiplexer struct {
 	spendCacheMu       sync.Mutex
 	spendCache         []spend.Candidate
 	spendCacheAt       time.Time
+	spendCacheMode     string
 	spendRecordsMu     sync.Mutex
 	spendRecords       []spend.Record
 }

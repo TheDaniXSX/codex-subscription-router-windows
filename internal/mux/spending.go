@@ -20,6 +20,9 @@ import (
 
 const spendProvider = "codex_router_spend"
 
+// Long reasoning/queueing can legitimately precede the first response headers.
+const spendResponseHeaderTimeout = 5 * time.Minute
+
 func (m *Multiplexer) startSpendGateway() error {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -34,7 +37,7 @@ func (m *Multiplexer) startSpendGateway() error {
 	m.spendURL = "http://" + listener.Addr().String() + "/v1"
 	u, _ := url.Parse("https://chatgpt.com/backend-api/codex/responses")
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.ResponseHeaderTimeout = 60 * time.Second
+	transport.ResponseHeaderTimeout = spendResponseHeaderTimeout
 	transport.MaxConnsPerHost = 32
 	transport.MaxIdleConnsPerHost = 16
 	g := &spend.Gateway{Policy: m.spendPolicy, Token: m.spendToken, Upstream: u, RoundTrip: transport, Candidates: m.spendCandidates, Credentials: m.spendCredentials, Observe: m.recordSpend}
@@ -57,17 +60,53 @@ func (m *Multiplexer) updateSpendMode() {
 }
 
 func (m *Multiplexer) spendCandidates(ctx context.Context) ([]spend.Candidate, error) {
-	m.spendCacheMu.Lock()
+	// Waiting callers must be able to cancel even while a refresh is in flight.
+	for !m.spendCacheMu.TryLock() {
+		timer := time.NewTimer(20 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 	defer m.spendCacheMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	selected := ""
+	if mode := m.store.RoutingMode(); mode.Mode == "account" {
+		selected = mode.AccountID
+	}
 	now := m.now()
-	if now.Sub(m.spendCacheAt) < 2*time.Second && len(m.spendCache) > 0 {
+	if m.spendCacheMode == selected && now.Sub(m.spendCacheAt) < 2*time.Second && len(m.spendCache) > 0 {
 		return append([]spend.Candidate(nil), m.spendCache...), nil
 	}
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, m.requestTimeout)
 	defer cancel()
-	snapshots := m.accountSnapshots(ctx, false)
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
+	snapshots := m.accountSnapshots(ctx, false, selected)
+	if parent.Err() != nil {
+		return nil, parent.Err()
+	}
+	if ctx.Err() != nil && selected == "" {
+		// A failed account must not poison Auto. Recheck only accounts that
+		// actually replied, rather than making their old samples appear fresh.
+		var responsive []string
+		for _, s := range snapshots {
+			weekly, _ := longestAndShortestWindow(s.RateLimits)
+			if s.Enabled && s.Connected && weekly != nil {
+				responsive = append(responsive, s.ID)
+			}
+		}
+		if len(responsive) > 0 {
+			recheck, stop := context.WithTimeout(parent, m.requestTimeout)
+			snapshots = m.accountSnapshots(recheck, false, responsive...)
+			stop()
+			if parent.Err() != nil {
+				return nil, parent.Err()
+			}
+		}
 	}
 	result := make([]spend.Candidate, 0, len(snapshots))
 	for _, s := range snapshots {
@@ -81,13 +120,31 @@ func (m *Multiplexer) spendCandidates(ctx context.Context) ([]spend.Candidate, e
 			}
 		}
 		credits := resetCreditMetadata{}
-		if account, ok := m.store.Account(s.ID); ok && s.Connected {
-			credits = m.routingResetCredits(ctx, account)
+		// Optional reset bonuses must never hold up inference capacity reads.
+		m.resetCreditsMu.Lock()
+		if entry, ok := m.resetCreditsCache[s.ID]; ok && m.now().Before(entry.expiresAt) {
+			credits = entry.metadata
 		}
-		result = append(result, spend.Candidate{ID: s.ID, Enabled: s.Enabled, Connected: s.Connected && s.AuthType == "chatgpt", Known: known, Remaining: remaining, Urgency: routeUrgencyScore(now, weekly, credits), ObservedAt: now})
+		m.resetCreditsMu.Unlock()
+		result = append(result, spend.Candidate{ID: s.ID, Enabled: s.Enabled, Connected: s.Connected && s.AuthType == "chatgpt", Known: known, Remaining: remaining, Urgency: routeUrgencyScore(now, weekly, credits), ObservedAt: s.observedAt})
+	}
+	// Cache age and individual observation age serve different purposes.
+	completedAt := m.now()
+	// Do not relabel an early result as fresh after another account timed out.
+	if ctx.Err() != nil {
+		fresh := false
+		for _, c := range result {
+			if c.Known && c.Connected && c.Enabled && completedAt.Sub(c.ObservedAt) < 5*time.Second {
+				fresh = true
+			}
+		}
+		if !fresh {
+			return nil, ctx.Err()
+		}
 	}
 	m.spendCache = result
-	m.spendCacheAt = now
+	m.spendCacheMode = selected
+	m.spendCacheAt = completedAt
 	return append([]spend.Candidate(nil), result...), nil
 }
 
