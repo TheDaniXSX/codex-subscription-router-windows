@@ -1947,8 +1947,11 @@ def patch_app(
     state_root_preexisted = state_root.exists()
     with tempfile.TemporaryDirectory(
         # @electron/asar's minimatch defaults do not traverse a leading-dot
-        # staging segment for the exact **/{...} unpack pattern.
-        prefix="codex-subscription-router-staging-", dir=destination.parent
+        # staging segment for the exact **/{...} unpack pattern. Keep the
+        # prefix short: staging sits beside the destination, and the 26.908
+        # cua_node tree has 168-character relative paths that overflow MAX_PATH
+        # when long paths are disabled.
+        prefix="csr-stg-", dir=destination.parent
     ) as temporary:
         temporary_path = Path(temporary)
         staged_app = temporary_path / destination.name
