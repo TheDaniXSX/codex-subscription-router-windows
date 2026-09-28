@@ -5,6 +5,38 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Codex 26.924 source preview
+
+- Add an exact compatibility profile for Windows Codex `26.924.2738.0`
+  (internal desktop `26.924.22138`, build `11645`; bundled CLI
+  `0.158.0-alpha.2.1`; original ASAR SHA-256
+  `89fba67324ffb8dd54ccf13b6f097172e697549eeb1f26396f86f972c10c5b0c`). The
+  new bootstrap/updater and AppUserModelID bindings, runtime-cache location,
+  native-messaging bundle, profile dropdown, reset modal, profile/plugin views,
+  and latest-inference subscription panel have new bundle locations and anchors.
+  Preserve updater policy initialization while disabling copied-app updates.
+  Load shared account controls before direct profile/plugin navigation and
+  defer thread event subscriptions until their helper is ready. Fix profile
+  refresh and preserve React component wrappers. See the qualification record
+  in `docs/UPGRADE-26924-PLAN.md` for tests and runtime limitations.
+- Inventory the 26.924 Computer Use tree as 2,366 files / 251,062,420 bytes
+  (tree SHA-256 `355f5b4661571019ff76e671289320694585e6e3c5fabfddd27f77f6a48f8cb9`),
+  with manifest Node `24.21.0-cua.1`, Node binary `24.21.0`, runtime
+  `0.0.24/20260924074400-f52ea85e2a98`, and `@oai/cua` `0.2.5`. This is static
+  payload evidence, not a live Computer Use qualification.
+- The 26.924 Electron integrity rebind preserves the verified upstream wrapper
+  as `ChatGPT.original.exe` and derives `ChatGPT.real.exe` with the expected
+  patched-ASAR digest. The derived runtime executable does not retain OpenAI's
+  Authenticode signature; only local runtime validation can establish whether
+  this packaging change works safely. Do not describe it as an unchanged or
+  OpenAI-signed executable.
+- Require PowerShell 7 for install/update/rollback/uninstall and preflight the
+  payload paths projected into destination and staging against the classic
+  `MAX_PATH` limit before copying. Repository-only verification retains its
+  separate PowerShell 5.1-compatible path.
+- Parse every modified JavaScript bundle before publishing a patched app and
+  provide an opt-in, unauthenticated real app-server smoke using temporary homes.
+
 ### Fixed
 
 - Support Windows Codex `26.917.6896.0` (inner `26.917.51856`, build `10492`,

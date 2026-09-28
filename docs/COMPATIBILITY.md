@@ -7,7 +7,55 @@ publishing a destination if any expectation differs.
 
 ## Release 0.2.0
 
-### Current source checkout (September 22 update)
+### Current source preview (2026-09-28)
+
+Exact patch profile: `windows-26.924.2738.0-x64-r1`.
+
+| Component | Inspected candidate value |
+| --- | --- |
+| Official package | `OpenAI.Codex`, version `26.924.2738.0`, `x64` |
+| Internal desktop version/build | `26.924.22138` / `11645` |
+| Bundled Codex CLI | `0.158.0-alpha.2.1` |
+| Original `app.asar` SHA-256 | `89fba67324ffb8dd54ccf13b6f097172e697549eeb1f26396f86f972c10c5b0c` |
+| OpenAI Authenticode signer thumbprint | `DB9831002B26D78F14E07806F595C6A429E9B6E9` |
+| Computer Use tree | 2,366 files / 251,062,420 bytes; SHA-256 `355f5b4661571019ff76e671289320694585e6e3c5fabfddd27f77f6a48f8cb9` |
+| Computer Use Node manifest / binary | `24.21.0-cua.1` / `24.21.0` |
+| Computer Use runtime | `0.0.24/20260924074400-f52ea85e2a98` |
+| `@oai/cua` | `0.2.5` |
+
+The main-process bootstrap is now `bootstrap-D2PJMYEh.js`; its updater and
+AppUserModelID anchors moved, and runtime caches now live under
+`application-network-startup-CY4ZWOz-.js`. The profile selector now uses
+`profile-dropdown-items-474171673a46.js` with its shell assembled in
+`app-initial-ff48311587c5.js`; the reset modal is exported from
+`modal-impl-629ff3f666ce.js`. Shared account requests, profile refresh, plugin
+settings, latest-inference attribution, and native messaging are located in
+`app-shared-c568b0b98683.js`, `profile-38e7880be288.js`,
+`plugins-settings-b59e65830e0f.js`,
+`local-conversation-thread-e96297c6d662.js`, and `src-BSSLXJxP.js` respectively.
+The profile adapts those paths while retaining the router CLI override,
+isolated `userData`, protocol protection, and opt-in Appshots policy.
+
+The 26.924 integrity workaround is intentionally different from older
+byte-identical-wrapper profiles: the verified upstream `ChatGPT.exe` is retained
+as `ChatGPT.original.exe`; `ChatGPT.real.exe` is derived by changing the
+`INTEGRITY/ELECTRONASAR` expected ASAR digest. That derived executable does not
+retain OpenAI's Authenticode signature and must not be represented as an
+unchanged or OpenAI-signed binary. The original signature must be verified
+before the derivation, and the exact resource-only change plus launch behavior
+remain explicit security/runtime gates.
+
+The exact input passed signature/hash inventory. Local tests passed: 129
+Windows Python tests, 45 JS tests, 9 release tests, Go tests/vet and offline
+Windows smoke. The packed-menu contract covers Rename, Auto/account routing,
+Usage, scoped reset query/redemption, profile refresh, plugin scope and lazy
+helper readiness. All 13 modified JavaScript bundles parse. Tests use synthetic
+accounts and do not redeem real credits. The CUA digest and manifest are static
+payload checks, not proof of a live Computer Use session. Build verification,
+activation and live acceptance are recorded separately in
+[the 26.924 qualification record](UPGRADE-26924-PLAN.md).
+
+### Previous source checkout (September 22 update)
 
 Additional patch profile: `windows-26.917.6896.0-x64-r1`.
 

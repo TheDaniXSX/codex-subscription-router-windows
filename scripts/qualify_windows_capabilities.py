@@ -78,6 +78,11 @@ def validate_approved_computer_use(
             expected["cua_package_version"],
         ),
     }
+    if "cua_node_manifest_version" in expected:
+        comparisons["Node manifest version"] = (
+            computer_use["nodeManifestVersion"],
+            expected["cua_node_manifest_version"],
+        )
     for label, (actual, wanted) in comparisons.items():
         if actual != wanted:
             raise RuntimeError(

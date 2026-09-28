@@ -53,6 +53,28 @@ class ArgumentTests(unittest.TestCase):
 
 
 class PathSafetyTests(unittest.TestCase):
+    def test_path_preflight_rejects_long_staging_before_copying(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source"
+            write_pe(source / "resources" / "helper.exe")
+            destination = Path(temporary) / "router"
+            staged = Path(temporary) / ("x" * 230) / "router"
+            with self.assertRaisesRegex(RuntimeError, "Windows path preflight failed"):
+                patcher.validate_windows_path_budget(source, destination, staged)
+            self.assertFalse(destination.exists())
+            self.assertFalse(staged.exists())
+
+    def test_path_preflight_counts_utf16_and_accepts_short_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source"
+            write_pe(source / "helper.exe")
+            destination = Path(temporary) / "router"
+            patcher.validate_windows_path_budget(source, destination, destination / "stage")
+            # Astral characters use two Windows code units, not one.
+            staged = Path(temporary) / ("\U0001f680" * 140) / "router"
+            with self.assertRaisesRegex(RuntimeError, "Windows path preflight failed"):
+                patcher.validate_windows_path_budget(source, destination, staged)
+
     def test_state_root_is_not_resolved_through_msix_virtualization(self) -> None:
         configured = r"C:\Users\example\AppData\Local\Codex Subscription Router"
         with mock.patch.dict(os.environ, {"CODEX_ROUTER_DATA_DIR": configured}):

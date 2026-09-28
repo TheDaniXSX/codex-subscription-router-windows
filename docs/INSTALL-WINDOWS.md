@@ -28,17 +28,24 @@ router** cuando se usa `-Force`.
 
 ## Compatibilidad
 
-La versión más reciente revisada es:
+El código incluye un perfil exacto para Codex `26.924.2738.0` (AppX x64,
+versión de escritorio interna `26.924.22138`, build `11645`; Codex CLI
+`0.158.0-alpha.2.1`; `app.asar` SHA-256
+`89fba67324ffb8dd54ccf13b6f097172e697549eeb1f26396f86f972c10c5b0c`). El
+candidato pasó 129 pruebas Python Windows, 45 JS, 9 de release, `go test`/
+`go vet` y el smoke offline de Windows. Las acciones del menú empaquetado y la
+sintaxis de sus 13 bundles modificados también se comprueban antes de publicar
+la app local. Consulta el [registro de cualificación](UPGRADE-26924-PLAN.md)
+para distinguir build, protocolo, activación y aceptación live de voz/CUA.
+Los perfiles previos y la evidencia histórica están en
+[COMPATIBILITY.md](COMPATIBILITY.md).
 
-| Componente | Valor |
-| --- | --- |
-| Paquete | `OpenAI.Codex` |
-| Versión | `26.917.6896.0` |
-| Arquitectura | `x64` |
-| `app.asar` SHA-256 | `00b7936388d11a3faede5fc736a8c6264eb66e1907bac4ef72c39b7399175d68` |
-
-También se conserva compatibilidad con `26.820.9563.0`. Los perfiles exactos
-están documentados en [COMPATIBILITY.md](COMPATIBILITY.md).
+Para 26.924, la construcción valida la firma del `ChatGPT.exe` original y
+conserva esa copia como `ChatGPT.original.exe`, pero deriva
+`ChatGPT.real.exe` actualizando el digest `INTEGRITY/ELECTRONASAR`. El ejecutable
+derivado deja de tener la firma Authenticode de OpenAI. No lo presentes como un
+binario oficial firmado. El verificador exige que solo cambie el campo del
+digest previsto; la aceptación funcional del escritorio se evalúa por separado.
 
 El instalador selecciona de forma predeterminada el paquete
 `OpenAI.Codex` más reciente registrado para el usuario. Si Microsoft Store ya
@@ -50,12 +57,19 @@ revisar el nuevo ASAR, actualizar las anclas y completar las pruebas.
 
 - Windows 10 2004 o posterior; el baseline se obtuvo en Windows x64.
 - La aplicación oficial de Codex instalada para el usuario actual.
-- PowerShell 5.1 o PowerShell 7.
+- PowerShell 7 para instalar, actualizar, revertir o desinstalar el router.
+  PowerShell 5.1 sigue siendo válido para algunas verificaciones solo del
+  repositorio, pero no para el ciclo de vida de la instalación.
 - Python 3.10 o posterior, disponible como `python.exe` o `py.exe`.
 - Node.js 22.12 o posterior, con npm.
 - Go 1.26 o posterior, salvo que se proporcionen **ambos** ejecutables
   precompilados mediante `-MuxPath` y `-LauncherPath`.
 - Un clone local de este repositorio.
+
+Para 26.924, usa rutas cortas de checkout y staging. El preflight
+rechaza rutas del payload proyectadas en destino/staging que alcancen el límite clásico de
+`MAX_PATH` antes de copiar archivos. Los ejemplos de ciclo de vida usan `pwsh`
+(PowerShell 7).
 
 El formato portable soportado no necesita Windows SDK, certificado de firma ni
 privilegios de administrador. `makeappx.exe` y `signtool.exe` solo son
