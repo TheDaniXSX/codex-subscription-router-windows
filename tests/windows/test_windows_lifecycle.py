@@ -571,6 +571,31 @@ class PowerShellLifecycleTests(unittest.TestCase):
             self.fail(f"Windows PowerShell 5.1 private ACL fixture failed:\n{result.stdout}")
         self.assertIn("is_admin=False", result.stdout)
 
+    def test_private_acl_powershell7_handles_backup_paths_beyond_max_path(self) -> None:
+        shell = shutil.which("pwsh")
+        if shell is None:
+            self.skipTest("PowerShell 7 is required for long backup paths")
+        private_root = self.allowed / "long-backup"
+        nested = private_root / ("a" * 90) / ("b" * 90) / ("c" * 90)
+        nested.mkdir(parents=True)
+        payload = nested / "payload.bin"
+        payload.write_bytes(b"preserved-backup")
+        self.assertGreater(len(str(payload)), 260)
+        probe = self.tool / "long-acl-probe.ps1"
+        probe.write_text(
+            "$ErrorActionPreference='Stop'\n"
+            "Import-Module (Join-Path $PSScriptRoot 'WindowsLifecycle.psm1') -Force\n"
+            "[void](Set-CsrPrivateDirectoryAcl -Path $args[0])\n"
+            "[void](Assert-CsrPrivateDirectoryAcl -Path $args[0])\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [shell, "-NoProfile", "-NonInteractive", "-File", str(probe), str(private_root)],
+            cwd=self.work, env=self.env, capture_output=True, text=True, timeout=30, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(payload.read_bytes(), b"preserved-backup")
+
     def test_rollback_whatif_is_a_complete_noop(self) -> None:
         _, backup = self._write_backup("20260101-older", "old", 20)
         self._write_layout(self.destination, "current", backup_path=backup)

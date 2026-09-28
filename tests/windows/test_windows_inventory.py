@@ -207,6 +207,16 @@ class WindowsSourceInventoryTests(unittest.TestCase):
         current = bundle.read_text(encoding="utf-8")
         for old, new in (("oY", "LZ"), ("sY", "RZ"), ("yJ", "XX"), ("Mq", "lX")):
             current = current.replace(old, new)
+        current_26924 = current
+        for old, new in (
+            ("function LZ(e)", "function oy(e)"),
+            ("function RZ(e)", "function sy(e)"),
+            ("function XX(e)", "function yv(e)"),
+            ("(0,i.join)", "(0,s.join)"),
+            ("r.default.homedir()", "f.default.homedir()"),
+            ("lX", "M_"),
+        ):
+            current_26924 = current_26924.replace(old, new)
         archive = Path(self.temporary.name) / "current.asar"
         # Load only the verifier's inspection functions: no installed app,
         # signatures, state, or inventory participates in this focused test.
@@ -224,6 +234,7 @@ $script:Checks.ToArray() | ConvertTo-Json -Compress
         probe.write_text(command, encoding="utf-8")
         variants = (
             ("current", current, True),
+            ("current 26.924", current_26924, True),
             ("mixed aliases", current.replace("function RZ(e){return}", "function sY(e){return}"), False),
             ("missing state isolation", current.replace("CODEX_MUX_HOME,lX", "LOCALAPPDATA,lX"), False),
             ("active registry mutation", current + " function LZ(e){if(process.platform!==`win32`)return;", False),

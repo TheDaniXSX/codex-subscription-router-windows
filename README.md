@@ -3,9 +3,10 @@
 Use multiple ChatGPT subscriptions from one independent Windows desktop app.
 
 Codex Subscription Router creates a locally patched copy of the official Codex
-desktop app, balances new chats across connected subscriptions, and keeps every
-thread on one subscription so follow-up turns retain conversation context and
-benefit from account-level caching.
+desktop app and routes spending across connected subscriptions. Conversation
+history and plugins retain their account owner, while each new model inference
+request—including a follow-up in an existing thread—can spend from the account
+selected by Auto or the explicit subscription mode.
 
 The official Codex desktop installation is used only as build input and is never
 modified. This repository contains source code and build tooling—not OpenAI
@@ -26,6 +27,9 @@ the Windows port.
 > Version 0.2.0 is a source-only Windows preview. Automated qualification is
 > extensive, but the final real-account, Appshots, Computer Use, signed MSIX,
 > and clean-VM gates remain open. It is not a stable Windows support claim.
+> The source includes the Codex 26.924 profile. Build/protocol qualification
+> is separate from activation and live voice/Computer Use acceptance; see
+> [the qualification record](docs/UPGRADE-26924-PLAN.md).
 
 ## Highlights
 
@@ -33,8 +37,9 @@ the Windows port.
   for each model request, including continuations and native subagents.
 - **Strict subscription selector.** Choose Auto or one spending subscription in
   the profile menu. Explicit selection never silently falls back to another account.
-- **Stable conversation ownership.** History and plugins keep their owner while
-  model requests can use a different subscription. Existing tasks are supported.
+- **Separate history and spending ownership.** History and plugins keep their
+  account owner; every new inference request can use a different spending
+  subscription. Existing threads and delegated requests follow the same rule.
 - **Safe failures.** Unavailable selected accounts stop new spending; uncertain
   requests are not automatically retried on another identity.
 - **Native account management.** The profile-menu implementation covers pooled
@@ -75,10 +80,11 @@ Codex Subscription Router (Windows)
              └── thread ID → persistent account owner
 ```
 
-New-thread routing compares the quota burn rate needed before each weekly reset,
-then applies a capped banked-reset boost. Short-window usage, pinned-thread
-count, and stable account order break close results. Existing threads do not
-migrate merely for load balancing.
+In Auto mode, each new inference request compares the quota burn rate needed
+before each weekly reset, then applies a capped banked-reset boost. Short-window
+usage, pinned-thread count, and stable account order break close results. An
+explicit subscription selection applies to each new inference request without
+moving the thread's history or plugin ownership.
 
 Read the [Windows architecture](docs/WINDOWS-ARCHITECTURE.md),
 [implementation plan](docs/WINDOWS-IMPLEMENTATION-PLAN.md), and
@@ -86,21 +92,30 @@ Read the [Windows architecture](docs/WINDOWS-ARCHITECTURE.md),
 
 ## Compatibility
 
-Codex Subscription Router currently targets:
+The current source profile targets the following exact upstream build.
+Live voice and Computer Use acceptance remain separately tracked:
 
-| Component | Supported value |
+| Component | Candidate value |
 | --- | --- |
 | Platform | Windows 10/11 x64 |
-| Official Store package | `26.917.6896.0` (also supports `26.915.4065.0`, `26.911.7940.0`, `26.908.4834.0`, `26.903.9818.0`, `26.903.8094.0`, `26.901.6511.0` and `26.820.9563.0`) |
-| Current inner desktop version/build | `26.917.51856` / `10492` |
-| Current bundled Codex CLI | `0.155.0-alpha.9.2` (as shipped by the official package) |
+| Official Store package candidate | `26.924.2738.0` (`x64`; runtime and release qualification pending) |
+| Internal desktop version/build | `26.924.22138` / `11645` |
+| Bundled Codex CLI | `0.158.0-alpha.2.1` |
+| Candidate original `app.asar` SHA-256 | `89fba67324ffb8dd54ccf13b6f097172e697549eeb1f26396f86f972c10c5b0c` |
+| Previously documented profile | `26.917.6896.0` (`26.917.51856`, build `10492`) and older profiles listed in [compatibility records](docs/COMPATIBILITY.md) |
 | Go | 1.26 or newer |
 | Node.js | 22.12 or newer |
 | Python | 3.10 or newer |
 
 The patcher verifies the official version, build, ASAR hash, renderer anchors,
 and source executable signatures before changing anything. An unknown upstream
-build is rejected by default rather than being partially patched.
+build is rejected by default rather than being partially patched. For 26.924,
+the local build derives `ChatGPT.real.exe` by rebinding the Electron ASAR
+integrity digest; the original signed `ChatGPT.exe` is retained as
+`ChatGPT.original.exe`, but the derived runtime executable does not retain
+OpenAI's Authenticode signature. The effect and runtime acceptance of this
+change remain qualification gates; the official Store installation is not
+modified.
 
 ## Requirements
 
@@ -108,7 +123,8 @@ build is rejected by default rather than being partially patched.
 - Go 1.26+
 - Node.js 22.12+ and npm
 - Python 3.10+
-- PowerShell 5.1+ (PowerShell 7 recommended)
+- PowerShell 7 for install/update/uninstall/rollback operations;
+  repository-only verification may still use PowerShell 5.1+
 
 ## Install
 
@@ -118,7 +134,7 @@ Clone the Windows fork, inspect the installer, and run it as the current user:
 git clone https://github.com/TheDaniXSX/codex-subscription-router-windows.git
 Set-Location .\codex-subscription-router-windows
 npm ci --ignore-scripts
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows.ps1
 ```
 
 The installer treats `WindowsApps` as immutable input, builds in staging,
@@ -141,7 +157,7 @@ git clone https://github.com/TheDaniXSX/codex-subscription-router-windows.git
 Set-Location .\codex-subscription-router-windows
 npm ci --ignore-scripts
 python .\scripts\patch_windows_app.py --dry-run
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows.ps1
 ```
 
 This creates:
@@ -171,11 +187,11 @@ starts another sign-in.
 
 | Situation | Behaviour |
 | --- | --- |
-| New chat | Assigned by quota-at-risk, banked resets, and short-window pressure |
-| Follow-up | Sent to the thread's persisted account owner |
-| Owner depleted | Continued through another account with capacity |
+| New inference, including a follow-up | Billed per request: Auto re-evaluates; explicit mode uses the selected subscription |
+| Thread history and plugins | Continue to use the persisted history owner, independently of the spending account |
+| Selected subscription unavailable | New requests stop in explicit mode; there is no silent fallback |
 | Every account depleted | Combined quota alert with the next known reset |
-| Account disabled | Excluded from routing and pooled usable quota |
+| Account disabled | Excluded from Auto routing and pooled usable quota |
 
 History ownership is independent of per-request spending. The task's
 **Environment → Subscription** section shows **Last request**: the subscription
@@ -210,10 +226,12 @@ or disabling the selected spending account. Renaming it preserves the selection.
 The preference survives restarts in a private `routing-mode.json` alongside
 `state.json`; older router versions ignore this separate file during rollback.
 
-The request transport has been qualified with CLI 0.153.4 / Astra. It uses full-history
-HTTP requests; unsupported server-side continuation handles fail closed. Model-specific
-quota buckets and other models still need additional qualification. External clients
-or scripts that bypass the router are not controlled. See
+The request transport was previously qualified with CLI 0.153.4 / Astra. That is
+historical transport evidence, not desktop qualification for the 26.924 candidate;
+retest against the exact candidate before claiming end-to-end support. It uses
+full-history HTTP requests; unsupported server-side continuation handles fail
+closed. Model-specific quota buckets and other models still need additional
+qualification. External clients or scripts that bypass the router are not controlled. See
 [transport and validation details](docs/PER-REQUEST-SPENDING.md). Installing this
 change requires closing the old router once; later mode changes do not require restarting.
 

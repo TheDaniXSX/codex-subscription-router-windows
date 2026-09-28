@@ -83,6 +83,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Backups and account plugin trees can exceed MAX_PATH. Windows PowerShell
+# 5.1 may fail while enumerating their ACLs; repository-only checks need no tree.
+if (-not $RepositoryOnly -and $PSVersionTable.PSVersion.Major -lt 7) {
+    throw 'Full build verification requires PowerShell 7 or later. Run this script with pwsh.'
+}
+
 if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
     $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
     $RepositoryRoot = Split-Path -Parent $scriptDirectory
@@ -1365,6 +1371,15 @@ function Test-AsarArchive {
         # the native-host guard, or accept a partially upgraded payload.
         $isolationProfiles = @(
             @{
+                Name = '26.924'
+                Markers = @(
+                    'function oy(e){return}',
+                    'function sy(e){return}',
+                    'function yv(e){if(process.platform===`win32`)return process.env.CODEX_MUX_HOME?[(0,s.join)(process.env.CODEX_MUX_HOME,M_)]:[];',
+                    'case`win32`:return(0,s.join)(process.env.CODEX_MUX_HOME??(0,s.join)(process.env.LOCALAPPDATA??(0,s.join)(f.default.homedir(),`AppData`,`Local`),`Codex Subscription Router`),M_);'
+                )
+            },
+            @{
                 Name = '26.917'
                 Markers = @(
                     'function S4(e){return}',
@@ -1454,6 +1469,11 @@ function Test-AsarArchive {
             'function oY(e){if(process.platform!==`win32`)return;',
             'function sY(e){let t=e.manifestPath;process.platform!==`win32`',
             'case`win32`:return Fy(`windows`).map',
+            'function oy(e){if(process.platform!==`win32`)return;',
+            'function sy(e){let t=e.manifestPath;process.platform!==`win32`',
+            'case`win32`:return n.di(`windows`).map',
+            'function yv(e){let t=bv();return[...t==null?[]:[t],(0,s.join)(e.codexHome,M_)]',
+            'case`win32`:return(0,s.join)(process.env.LOCALAPPDATA??(0,s.join)(f.default.homedir(),`AppData`,`Local`),`OpenAI`,`Codex`,M_);',
             'function LZ(e){if(process.platform!==`win32`)return;',
             'function RZ(e){let t=e.manifestPath;process.platform!==`win32`',
             'case`win32`:return Pb(`windows`).map',
