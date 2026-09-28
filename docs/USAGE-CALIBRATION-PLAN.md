@@ -54,6 +54,16 @@ cuando hay un reloj monotónico disponible.
   todavía conserva ciertos overrides heredados y una identidad visual fija:
   hace falta completar el aislamiento antes de ejecutar DEV junto a PROD.
 
+Ancla 26.924 localizada en la instalación: `collapsed-turn-disclosure-61dac5311725.js`,
+función `y(e)` para la etiqueta y `b(e)` para la fila. `gc(e)` en
+`local-conversation-turn-543a8ec414f6.js` conoce conversationId/turnId y actividad
+de agentes; hay que pasar esa identidad a través de
+`conversation-blocks-8e6b09dae28b.js`. La UI nativa relaciona hijos directos con
+`parentTurnKey` y conversationId. El gateway reenvía `X-Codex-Parent-Thread-Id`,
+pero no lo persiste. Esas relaciones son puntos de integración observados;
+la asociación transitiva y el ciclo de vida de agentes separados se cualifican
+en M2. Estos nombres pertenecen exclusivamente al perfil exacto 26.924.
+
 ## 3. Modelo de datos y correlación
 
 Almacén propio `usage-ledger.sqlite` bajo el StateRoot de cada instalación,
