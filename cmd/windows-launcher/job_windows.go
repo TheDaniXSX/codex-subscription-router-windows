@@ -11,6 +11,7 @@ import (
 const (
 	jobObjectExtendedLimitInformationClass = 9
 	jobObjectLimitKillOnJobClose           = 0x00002000
+	jobObjectLimitBreakawayOK              = 0x00000800
 )
 
 var (
@@ -73,7 +74,8 @@ func superviseDescendants() error {
 	}()
 
 	limits := jobObjectExtendedLimitInformation{}
-	limits.BasicLimitInformation.LimitFlags = jobObjectLimitKillOnJobClose
+	// Only explicitly detached children (the shared broker) can outlive the app.
+	limits.BasicLimitInformation.LimitFlags = jobObjectLimitKillOnJobClose | jobObjectLimitBreakawayOK
 	result, _, callErr := setInformationJobObject.Call(
 		job,
 		jobObjectExtendedLimitInformationClass,

@@ -32,15 +32,21 @@ const (
 )
 
 type Options struct {
-	RealExecutable string
-	RealArgs       []string
-	Environment    []string
-	Store          *state.Store
-	Output         io.Writer
+	// Called synchronously after a backend stops, before its replacement can
+	// accept work. Shared frontends must clear only that generation's leases.
+	OnBackendStopped func(accountID string)
+	RealExecutable   string
+	RealArgs         []string
+	Environment      []string
+	Store            *state.Store
+	Output           io.Writer
 	// RequestTimeout defaults to 30 seconds. A shorter value is useful for
 	// deterministic integration tests and constrained hosts.
 	RequestTimeout  time.Duration
 	RequestSpending bool
+	// UsageRoot stores quota telemetry independently of the shared account and
+	// chat store. Empty or whitespace-only values preserve Store.Root().
+	UsageRoot string
 }
 
 type externalRoute struct {
@@ -53,9 +59,12 @@ type externalRoute struct {
 }
 
 type serverRequestRoute struct {
-	accountID string
-	original  json.RawMessage
-	expiresAt time.Time
+	accountID  string
+	original   json.RawMessage
+	remappedID json.RawMessage
+	threadID   string
+	responded  bool
+	expiresAt  time.Time
 }
 
 type accountRuntime struct {
@@ -77,11 +86,12 @@ type Event struct {
 // Multiplexer presents one app-server connection to ChatGPT.app while owning
 // one real app-server process per ChatGPT subscription.
 type Multiplexer struct {
-	realExecutable string
-	realArgs       []string
-	environment    []string
-	store          *state.Store
-	output         io.Writer
+	onBackendStopped func(string)
+	realExecutable   string
+	realArgs         []string
+	environment      []string
+	store            *state.Store
+	output           io.Writer
 
 	childrenMu sync.RWMutex
 	children   map[string]*backend.Child
@@ -144,6 +154,7 @@ type Multiplexer struct {
 	threadSpending     map[string]state.ThreadSpend
 	threadSpendUnsaved map[string]bool
 	usageLedger        *usage.Manager
+	usageRoot          string
 	usageTelemetry     *usageTracking
 	usageMutationMu    sync.Mutex
 	usageRelations     *usageRelationsState
@@ -163,6 +174,7 @@ func New(options Options) (*Multiplexer, error) {
 		timeout = requestTimeout
 	}
 	m := &Multiplexer{
+		onBackendStopped:     options.OnBackendStopped,
 		realExecutable:       options.RealExecutable,
 		realArgs:             append([]string(nil), options.RealArgs...),
 		environment:          append([]string(nil), options.Environment...),
@@ -183,6 +195,7 @@ func New(options Options) (*Multiplexer, error) {
 		resetCreditsEndpoint: rateLimitResetCreditsURL,
 		resetPreviews:        make(map[string]ResetCreditsPreview),
 		requestSpending:      options.RequestSpending,
+		usageRoot:            strings.TrimSpace(options.UsageRoot),
 		spendPolicy:          spend.New(5 * time.Second),
 	}
 	m.initUsage()
@@ -281,14 +294,17 @@ func (m *Multiplexer) Close() {
 }
 
 func (m *Multiplexer) HandleClient(message protocol.Message) {
+	// Broker callbacks may reject an unroutable server request while Output is
+	// being written. Responses must never recursively write another response,
+	// including during shutdown.
+	if message.Method == "" && len(message.ID) > 0 {
+		m.handleServerRequestResponse(message)
+		return
+	}
 	if m.closing.Load() {
 		if len(message.ID) > 0 {
 			m.write(protocol.Failure(message.ID, -32034, "router is shutting down"))
 		}
-		return
-	}
-	if message.Method == "" && len(message.ID) > 0 {
-		m.handleServerRequestResponse(message)
 		return
 	}
 	if message.Method == "initialize" && len(message.ID) > 0 {
@@ -613,8 +629,13 @@ func (m *Multiplexer) handleServerRequestResponse(message protocol.Message) {
 	key := protocol.RequestIDKey(message.ID)
 	m.serverMu.Lock()
 	route, ok := m.serverRoutes[key]
-	if ok {
-		delete(m.serverRoutes, key)
+	if ok && !route.responded {
+		// Keep the correlation until native resolution so the notification uses
+		// the same ID the desktop received, even after it has answered.
+		route.responded = true
+		m.serverRoutes[key] = route
+	} else {
+		ok = false
 	}
 	m.serverMu.Unlock()
 	if !ok {
@@ -677,6 +698,10 @@ func (m *Multiplexer) handleInbound(inbound backend.Inbound) {
 	}
 	if message.Method != "" && len(message.ID) > 0 {
 		m.forwardServerRequest(inbound)
+		return
+	}
+	if message.Method == "serverRequest/resolved" {
+		m.forwardServerRequestResolved(inbound)
 		return
 	}
 	if message.Method == "account/rateLimits/updated" {
@@ -795,13 +820,75 @@ func (m *Multiplexer) forwardServerRequest(inbound backend.Inbound) {
 	key := protocol.RequestIDKey(newID)
 	m.serverMu.Lock()
 	m.serverRoutes[key] = serverRequestRoute{
-		accountID: inbound.AccountID,
-		original:  append(json.RawMessage(nil), inbound.Message.ID...),
-		expiresAt: m.now().Add(m.requestTimeout),
+		accountID:  inbound.AccountID,
+		original:   append(json.RawMessage(nil), inbound.Message.ID...),
+		remappedID: append(json.RawMessage(nil), newID...),
+		threadID:   threadIDFromParams(inbound.Message.Params),
+		expiresAt:  m.now().Add(m.requestTimeout),
 	}
 	m.serverMu.Unlock()
 	inbound.Message.ID = newID
 	m.write(inbound.Message)
+}
+
+func (m *Multiplexer) forwardServerRequestResolved(inbound backend.Inbound) {
+	var params map[string]json.RawMessage
+	if json.Unmarshal(inbound.Message.Params, &params) != nil || len(params["requestId"]) == 0 {
+		return
+	}
+	originalKey := protocol.RequestIDKey(params["requestId"])
+	threadID := threadIDFromParams(inbound.Message.Params)
+	var resolved serverRequestRoute
+	matchedKey := ""
+	m.serverMu.Lock()
+	for key, route := range m.serverRoutes {
+		if route.accountID != inbound.AccountID || protocol.RequestIDKey(route.original) != originalKey {
+			continue
+		}
+		if threadID != "" && route.threadID != "" && threadID != route.threadID {
+			continue
+		}
+		// A missing thread on an ambiguous reused ID cannot select an owner.
+		if matchedKey != "" {
+			m.serverMu.Unlock()
+			return
+		}
+		matchedKey, resolved = key, route
+	}
+	if matchedKey != "" {
+		delete(m.serverRoutes, matchedKey)
+	}
+	m.serverMu.Unlock()
+	if matchedKey == "" {
+		return
+	} // Unknown/replayed native IDs must not leak.
+	params["requestId"] = resolved.remappedID
+	if len(params["requestId"]) == 0 {
+		params["requestId"] = json.RawMessage(matchedKey)
+	}
+	if threadID == "" && resolved.threadID != "" {
+		params["threadId"], _ = json.Marshal(resolved.threadID)
+	}
+	message := inbound.Message
+	var err error
+	message.Params, err = json.Marshal(params)
+	if err == nil {
+		m.write(message)
+	}
+}
+
+func (m *Multiplexer) emitServerRequestResolved(route serverRequestRoute) {
+	if len(route.remappedID) == 0 {
+		return
+	}
+	params := map[string]json.RawMessage{"requestId": route.remappedID}
+	if route.threadID != "" {
+		params["threadId"], _ = json.Marshal(route.threadID)
+	}
+	encoded, err := json.Marshal(params)
+	if err == nil {
+		m.write(protocol.Message{Method: "serverRequest/resolved", Params: encoded})
+	}
 }
 
 func (m *Multiplexer) shouldForwardNotification(accountID, method string) bool {
@@ -958,7 +1045,16 @@ func (m *Multiplexer) stopChildLocked(accountID, status string) error {
 	if child == nil {
 		return nil
 	}
-	return child.Close()
+	err := child.Close()
+	select {
+	case <-child.Done():
+		if m.onBackendStopped != nil {
+			m.onBackendStopped(accountID)
+		}
+		m.publish(Event{Type: "account-backend-stopped", AccountID: accountID})
+	default:
+	}
+	return err
 }
 
 func (m *Multiplexer) removeChildIfCurrent(accountID string, child *backend.Child) bool {
@@ -978,9 +1074,17 @@ func (m *Multiplexer) childOperationLock(accountID string) *sync.Mutex {
 
 func (m *Multiplexer) monitorChild(accountID string, child *backend.Child) {
 	<-child.Done()
+	operation := m.childOperationLock(accountID)
+	operation.Lock()
 	if !m.removeChildIfCurrent(accountID, child) {
+		operation.Unlock()
 		return
 	}
+	if m.onBackendStopped != nil {
+		m.onBackendStopped(accountID)
+	}
+	m.publish(Event{Type: "account-backend-stopped", AccountID: accountID})
+	operation.Unlock()
 	m.lifecycleMu.Lock()
 	runCtx := m.runCtx
 	m.lifecycleMu.Unlock()
@@ -1281,15 +1385,19 @@ func (m *Multiplexer) expireRoutes(now time.Time) {
 	m.serverMu.Lock()
 	for key, route := range m.serverRoutes {
 		if !route.expiresAt.After(now) {
+			if len(route.remappedID) == 0 {
+				route.remappedID = json.RawMessage(key)
+			}
 			delete(m.serverRoutes, key)
 			expiredServer = append(expiredServer, route)
 		}
 	}
 	m.serverMu.Unlock()
 	for _, route := range expiredServer {
-		if child, ok := m.child(route.accountID); ok {
+		if child, ok := m.child(route.accountID); ok && !route.responded {
 			_ = child.Send(protocol.Failure(route.original, -32031, "desktop client timed out responding to app-server request"))
 		}
+		m.emitServerRequestResolved(route)
 	}
 }
 
@@ -1308,14 +1416,18 @@ func (m *Multiplexer) expireAllRoutes() {
 	m.serverMu.Lock()
 	server := make([]serverRequestRoute, 0, len(m.serverRoutes))
 	for key, route := range m.serverRoutes {
+		if len(route.remappedID) == 0 {
+			route.remappedID = json.RawMessage(key)
+		}
 		server = append(server, route)
 		delete(m.serverRoutes, key)
 	}
 	m.serverMu.Unlock()
 	for _, route := range server {
-		if child, ok := m.child(route.accountID); ok {
+		if child, ok := m.child(route.accountID); ok && !route.responded {
 			_ = child.Send(protocol.Failure(route.original, -32031, "router shut down before desktop client responded"))
 		}
+		m.emitServerRequestResolved(route)
 	}
 }
 

@@ -30,6 +30,17 @@ Directory for router state, account homes, logs, and control token.
 Immutable installation flavor. Production is the compatibility-preserving default;
 Development uses a private primary CODEX_HOME and a separate desktop identity.
 
+.PARAMETER SharedStateRoot
+Opt in to schema 3 shared broker state. Requires SharedPrimaryHome, UsageDataRoot,
+SharedProtocol 1 and ActivationPairId. StateRoot remains this app's private runtime.
+
+.PARAMETER PrepareOnly
+Build a persistent candidate at PreparedDestination while the installed app can
+remain open. Requires an explicit ControlPort; no live token, shortcut or app is changed.
+
+.PARAMETER PreparedDestination
+New path for a private candidate whose manifest remains bound to Destination.
+
 .PARAMETER MuxPath
 Optional prebuilt codex-mux.exe. When omitted, the patcher builds it from this
 checkout using the installed Go toolchain.
@@ -93,6 +104,14 @@ param(
     [string]$Destination = (Join-Path $env:LOCALAPPDATA 'Programs\Codex Subscription Router'),
 
     [string]$StateRoot = (Join-Path $env:LOCALAPPDATA 'Programs\Codex Subscription Router Data'),
+
+    [string]$SharedStateRoot,
+    [string]$SharedPrimaryHome,
+    [string]$UsageDataRoot,
+    [int]$SharedProtocol = 0,
+    [string]$ActivationPairId,
+    [switch]$PrepareOnly,
+    [string]$PreparedDestination,
 
     [string]$MuxPath,
 
@@ -509,19 +528,25 @@ function Invoke-LauncherSelfTest {
     )) {
         throw "Launcher self-test selected the wrong StateRoot: $($values['state_root'])"
     }
-    if ([int]$values['launcher_config_schema'] -ne 2 -or [int]$values['control_port'] -ne $ExpectedControlPort) {
+    $expectedSchema = if ($SharedProtocol -eq 1) { 3 } else { 2 }
+    if ([int]$values['launcher_config_schema'] -ne $expectedSchema -or [int]$values['control_port'] -ne $ExpectedControlPort) {
         throw "Launcher self-test selected an inconsistent schema/control port: schema=$($values['launcher_config_schema']), port=$($values['control_port'])"
     }
     if ($values['install_channel'] -cne $ExpectedInstallChannel) {
         throw "Launcher self-test selected channel '$($values['install_channel'])'; expected '$ExpectedInstallChannel'."
     }
-    if ($ExpectedInstallChannel -eq 'development') {
-        $expectedPrimaryCodexHome = Resolve-FullPath -Path (Join-Path $ExpectedStateRoot 'PrimaryHome')
+    if ($ExpectedInstallChannel -eq 'development' -or $SharedProtocol -eq 1) {
+        $expectedPrimaryCodexHome = if ($SharedProtocol -eq 1) { $SharedPrimaryHome } else { Resolve-FullPath -Path (Join-Path $ExpectedStateRoot 'PrimaryHome') }
         $expectedPrimarySQLiteHome = $expectedPrimaryCodexHome
         if (-not (Resolve-FullPath -Path $values['primary_codex_home']).Equals($expectedPrimaryCodexHome, [StringComparison]::OrdinalIgnoreCase) -or
             -not (Resolve-FullPath -Path $values['primary_sqlite_home']).Equals($expectedPrimarySQLiteHome, [StringComparison]::OrdinalIgnoreCase)) {
             throw 'Launcher self-test did not resolve the dedicated development Codex and SQLite homes.'
         }
+    }
+    if ($SharedProtocol -eq 1 -and ($values['shared_protocol'] -ne '1' -or
+        $values['activation_pair_id'] -cne $ActivationPairId -or
+        $values['shared_state_root'] -ine $SharedStateRoot -or $values['usage_data_root'] -ine $UsageDataRoot)) {
+        throw 'Launcher self-test selected an inconsistent shared binding.'
     }
 }
 
@@ -983,7 +1008,7 @@ function Test-InstalledLayout {
         -not [string]::IsNullOrWhiteSpace([string]$metadata.installChannel)) {
         ([string]$metadata.installChannel).ToLowerInvariant()
     } else { 'production' }
-    if ($null -eq $metadata.schemaVersion -or [int]$metadata.schemaVersion -ne 2 -or
+    if ($null -eq $metadata.schemaVersion -or [int]$metadata.schemaVersion -notin @(2, 3) -or
         $null -eq $metadata.sourceAsarSha256 -or $null -eq $metadata.muxSha256 -or
         $null -eq $metadata.controlPort -or [int]$metadata.controlPort -lt 49152 -or [int]$metadata.controlPort -gt 65535 -or
         $metadataChannel -cne $script:InstallChannelValue) {
@@ -998,7 +1023,7 @@ function Test-InstalledLayout {
         throw "Post-install verification failed; launcher-config.json is invalid: $($_.Exception.Message)"
     }
     $configProperties = @($launcherConfig.PSObject.Properties | ForEach-Object { $_.Name })
-    $expectedConfigProperties = if ($script:InstallChannelValue -eq 'development') { 6 } else { 3 }
+    $expectedConfigProperties = if ([int]$metadata.schemaVersion -eq 3) { 11 } elseif ($script:InstallChannelValue -eq 'development') { 6 } else { 3 }
     $sidecarChannel = if ($null -ne $launcherConfig.PSObject.Properties['installChannel'] -and
         -not [string]::IsNullOrWhiteSpace([string]$launcherConfig.installChannel)) {
         ([string]$launcherConfig.installChannel).ToLowerInvariant()
@@ -1008,10 +1033,10 @@ function Test-InstalledLayout {
         $configProperties -notcontains 'stateRoot' -or
         $configProperties -notcontains 'controlPort' -or
         $sidecarChannel -cne $metadataChannel -or
-        [int]$launcherConfig.schemaVersion -ne 2 -or
+        [int]$launcherConfig.schemaVersion -ne [int]$metadata.schemaVersion -or
         [int]$launcherConfig.controlPort -lt 49152 -or [int]$launcherConfig.controlPort -gt 65535 -or
         [string]::IsNullOrWhiteSpace($launcherConfig.stateRoot)) {
-        throw 'Post-install verification failed; launcher-config.json must contain exactly schemaVersion=2, stateRoot, and a high controlPort.'
+        throw 'Post-install verification failed; launcher-config.json does not match the selected schema, channel, stateRoot, and high controlPort.'
     }
     $persistedStateRoot = Resolve-FullPath -Path ([string]$launcherConfig.stateRoot)
     if (-not $persistedStateRoot.Equals((Resolve-FullPath -Path $RouterStateRoot), [StringComparison]::OrdinalIgnoreCase)) {
@@ -1031,8 +1056,19 @@ function Test-InstalledLayout {
         [string]$integration.displayName -cne $expectedDisplayName) {
         throw 'Post-install verification failed; manifest desktop identity does not match the installation channel.'
     }
-    if ($script:InstallChannelValue -eq 'development') {
-        $expectedCodexHome = Resolve-FullPath -Path (Join-Path $RouterStateRoot 'PrimaryHome')
+    if ([int]$metadata.schemaVersion -eq 3) {
+        foreach ($field in @('sharedStateRoot', 'sharedPrimaryHome', 'usageDataRoot', 'sharedProtocol', 'activationPairId')) {
+            if ($null -eq $launcherConfig.PSObject.Properties[$field] -or
+                [string]$launcherConfig.$field -cne [string]$metadata.$field) {
+                throw "Post-install verification failed; shared binding differs in $field."
+            }
+        }
+        if ([int]$metadata.sharedProtocol -ne 1 -or [string]$metadata.activationPairId -cnotmatch '^[A-Za-z0-9_-]{8,128}$') {
+            throw 'Post-install verification failed; unsupported shared protocol or activation pair.'
+        }
+    }
+    if ($script:InstallChannelValue -eq 'development' -or [int]$metadata.schemaVersion -eq 3) {
+        $expectedCodexHome = if ([int]$metadata.schemaVersion -eq 3) { Resolve-FullPath -Path ([string]$metadata.sharedPrimaryHome) } else { Resolve-FullPath -Path (Join-Path $RouterStateRoot 'PrimaryHome') }
         $expectedSQLiteHome = $expectedCodexHome
         foreach ($entry in @(
             @{ Sidecar = [string]$launcherConfig.primaryCodexHome; Manifest = [string]$metadata.primaryCodexHome; Expected = $expectedCodexHome; Name = 'primaryCodexHome' },
@@ -1162,6 +1198,38 @@ try {
     Assert-SeparateTrees -ReadOnlySource $Source -InstallDestination $Destination -RouterStateRoot $StateRoot
     Assert-SafeWritablePaths -InstallDestination $Destination -RouterStateRoot $StateRoot -LocalAppDataRoot $localAppDataRoot
     Assert-InstallChannelPaths -InstallDestination $Destination -RouterStateRoot $StateRoot -LocalAppDataRoot $localAppDataRoot -Channel $script:InstallChannelValue
+    $hasSharedBinding = -not [string]::IsNullOrWhiteSpace($SharedStateRoot) -or
+        -not [string]::IsNullOrWhiteSpace($SharedPrimaryHome) -or -not [string]::IsNullOrWhiteSpace($UsageDataRoot) -or
+        $SharedProtocol -ne 0 -or -not [string]::IsNullOrWhiteSpace($ActivationPairId)
+    if ($hasSharedBinding) {
+        if ($SharedProtocol -ne 1 -or $ActivationPairId -cnotmatch '^[A-Za-z0-9_-]{8,128}$' -or
+            [string]::IsNullOrWhiteSpace($SharedStateRoot) -or [string]::IsNullOrWhiteSpace($SharedPrimaryHome) -or
+            [string]::IsNullOrWhiteSpace($UsageDataRoot)) { throw 'Shared mode requires all three paths, SharedProtocol 1, and ActivationPairId.' }
+        $SharedStateRoot = Resolve-FullPath -Path $SharedStateRoot
+        $SharedPrimaryHome = Resolve-FullPath -Path $SharedPrimaryHome
+        $UsageDataRoot = Resolve-FullPath -Path $UsageDataRoot
+        foreach ($sharedPath in @($SharedStateRoot, $SharedPrimaryHome, $UsageDataRoot)) {
+            foreach ($boundary in @($Source, $Destination)) {
+                if ((Test-PathIsWithin $sharedPath $boundary) -or (Test-PathIsWithin $boundary $sharedPath)) {
+                    throw 'Shared data paths must not overlap the source or application destination.'
+                }
+            }
+        }
+    }
+    if ($PrepareOnly -or -not [string]::IsNullOrWhiteSpace($PreparedDestination)) {
+        if (-not $PrepareOnly -or [string]::IsNullOrWhiteSpace($PreparedDestination) -or $DryRun) {
+            throw 'PrepareOnly requires PreparedDestination and cannot be combined with DryRun.'
+        }
+        $PreparedDestination = Resolve-FullPath -Path $PreparedDestination
+        if (Test-Path -LiteralPath $PreparedDestination) { throw 'PreparedDestination must not already exist.' }
+        foreach ($boundary in @($Source, $Destination, $StateRoot, $SharedStateRoot, $SharedPrimaryHome, $UsageDataRoot)) {
+            if (-not [string]::IsNullOrWhiteSpace($boundary) -and
+                ((Test-PathIsWithin $PreparedDestination $boundary) -or (Test-PathIsWithin $boundary $PreparedDestination))) {
+                throw 'PreparedDestination must be separate from application and data trees.'
+            }
+        }
+        if ($ControlPort -lt 49152) { throw 'PrepareOnly requires an explicit high ControlPort; an active port is allowed until activation.' }
+    }
     if (-not [string]::IsNullOrWhiteSpace($MuxPath) -and
         ((Test-PathIsWithin -Candidate $MuxPath -Parent $Source) -or
          (Test-PathIsWithin -Candidate $MuxPath -Parent $Destination))) {
@@ -1192,10 +1260,10 @@ try {
         Assert-ExistingInstallationBinding -InstallDestination $Destination -RouterStateRoot $StateRoot -ExpectedChannel $script:InstallChannelValue
     }
 
-    if (-not $script:EffectiveDryRun) {
+    if (-not $script:EffectiveDryRun -and -not $PrepareOnly) {
         Initialize-SecureStateRoot -RouterStateRoot $StateRoot
     }
-    $logRoot = if ($script:EffectiveDryRun) {
+    $logRoot = if ($script:EffectiveDryRun -or $PrepareOnly) {
         Join-Path $env:TEMP 'Codex Subscription Router\logs'
     }
     else {
@@ -1284,17 +1352,17 @@ try {
     Write-Info "Backup policy after successful verification: retain the newest $BackupRetention authenticated rollback build(s); $existingBackupCount backup container(s) currently exist."
 
     $destinationExists = Test-Path -LiteralPath $Destination
-    if ($destinationExists -and -not $Force -and -not $script:EffectiveDryRun) {
+    if ($destinationExists -and -not $Force -and -not $script:EffectiveDryRun -and -not $PrepareOnly) {
         throw "Destination already exists: $Destination. Rerun with -Force to create a backup and replace it."
     }
-    if ($destinationExists -and -not $script:EffectiveDryRun) {
+    if ($destinationExists -and -not $script:EffectiveDryRun -and -not $PrepareOnly) {
         $routerProcesses = @(Get-RouterProcesses -InstallDestination $Destination)
         if ($routerProcesses.Count -gt 0) {
             $processSummary = ($routerProcesses | ForEach-Object { "$($_.Name) (PID $($_.ProcessId))" }) -join ', '
             throw "The existing router is running: $processSummary. Close only Codex Subscription Router and rerun. The installer will not terminate processes automatically."
         }
     }
-    $previousInstallationMarker = if ($destinationExists -and -not $script:EffectiveDryRun) {
+    $previousInstallationMarker = if ($destinationExists -and -not $script:EffectiveDryRun -and -not $PrepareOnly) {
         Get-InstallationMarker -InstallDestination $Destination
     }
     else {
@@ -1327,10 +1395,14 @@ try {
 
     $backupsBefore = @(Get-BackupDirectories -BackupRoot $backupRoot | ForEach-Object { $_.FullName })
 
-    Write-Step 'Reserving a private high loopback control port'
-    $script:ControlPortReservation = New-ControlPortReservation -RequestedPort $ControlPort
-    $ControlPort = [int]$script:ControlPortReservation.Port
-    Write-Info "Reserved control endpoint: 127.0.0.1:$ControlPort (held until the patched app is published)."
+    if ($PrepareOnly) {
+        Write-Info "Prepared control endpoint: 127.0.0.1:$ControlPort; port availability will be checked during activation."
+    } else {
+        Write-Step 'Reserving a private high loopback control port'
+        $script:ControlPortReservation = New-ControlPortReservation -RequestedPort $ControlPort
+        $ControlPort = [int]$script:ControlPortReservation.Port
+        Write-Info "Reserved control endpoint: 127.0.0.1:$ControlPort (held until the patched app is published)."
+    }
 
     Write-Step "$(if ($script:EffectiveDryRun) { 'Validating patch plan' } else { 'Building and installing independent router' })"
     $patchArguments = @($python.Prefix) + @(
@@ -1358,6 +1430,11 @@ try {
     if ($AllowUntestedSource) {
         $patchArguments += '--allow-untested-source'
     }
+    if ($hasSharedBinding) {
+        $patchArguments += @('--shared-state-root', $SharedStateRoot, '--shared-primary-home', $SharedPrimaryHome,
+            '--usage-data-root', $UsageDataRoot, '--shared-protocol', [string]$SharedProtocol, '--activation-pair-id', $ActivationPairId)
+    }
+    if ($PrepareOnly) { $patchArguments += @('--prepare-only', '--prepared-destination', $PreparedDestination) }
 
     $priorMuxHome = [Environment]::GetEnvironmentVariable('CODEX_MUX_HOME', 'Process')
     $priorMuxStateRoot = [Environment]::GetEnvironmentVariable('CODEX_MUX_STATE_ROOT', 'Process')
@@ -1381,7 +1458,7 @@ try {
                             $script:ControlPortReservation = $null
                         }
                     }
-                    $patcherPublished = -not $script:EffectiveDryRun
+                    $patcherPublished = -not $script:EffectiveDryRun -and -not $PrepareOnly
                     if ($patcherPublished -and $destinationExists) {
                         $newBackup = Find-NewBackupDirectory -BackupRoot $backupRoot -ExistingPaths $backupsBefore -DestinationLeaf (Split-Path -Leaf $Destination) -PreviousMarker $previousInstallationMarker
                     }
@@ -1405,7 +1482,7 @@ try {
     }
     catch {
         $patchFailure = $_.Exception.Message
-        if (-not $patcherPublished -and -not $script:EffectiveDryRun -and
+        if (-not $patcherPublished -and -not $script:EffectiveDryRun -and -not $PrepareOnly -and
             (Test-DestinationPublishedThisRun -InstallDestination $Destination -StartedAtUtc $script:InstallStartedAt -ExpectedSourceAsarSha256 $sourceBefore.AsarSha256)) {
             $patcherPublished = $true
             if ($destinationExists) {
@@ -1427,7 +1504,13 @@ try {
         throw
     }
 
-    if ($script:EffectiveDryRun) {
+    if ($PrepareOnly) {
+        $preparedLauncher = Test-InstalledLayout -InstallDestination $PreparedDestination -RouterStateRoot $StateRoot
+        Invoke-LauncherSelfTest -LauncherPath $preparedLauncher -ExpectedStateRoot $StateRoot -ExpectedControlPort $ControlPort -ExpectedInstallChannel $script:InstallChannelValue
+        Write-Host "`nPrepared successfully: $PreparedDestination" -ForegroundColor Green
+        Write-Info "Activation destination: $Destination. Installed payload, token, shortcuts and running processes were not changed."
+    }
+    elseif ($script:EffectiveDryRun) {
         Write-Host "`nDry run completed successfully. No router app or account state was installed." -ForegroundColor Green
         Write-Info "A normal installation would write the app to: $Destination"
         Write-Info "A normal installation would keep state at: $StateRoot"

@@ -1,8 +1,14 @@
 # Consumo por petición y calibración de cuota: plan de implementación
 
-Estado: **DEV instalada y abierta; aceptación con cuenta real pendiente**.
+Estado: **DEV aislada entregada; actualización de datos compartidos en cualificación**.
 Decisiones de producto confirmadas el 2026-09-28. Rama: `codex/usage-calibration`.
 Baseline revisado y actualizado desde GitHub: `c4eb2eae4fc5c59987a901d373f7b58f5015c3a9`.
+
+Decisión posterior del usuario (2026-09-29): PROD y DEV comparten proyectos,
+chats y cuentas. Sólo el almacenamiento/UI de calibración permanece en DEV.
+Esta decisión sustituye el aislamiento de datos propuesto inicialmente en este
+documento. La arquitectura y activación vigentes se describen en
+[SHARED-DESKTOP.md](SHARED-DESKTOP.md).
 
 ## 1. Resultado esperado
 
@@ -70,7 +76,7 @@ en M2. Estos nombres pertenecen exclusivamente al perfil exacto 26.924.
 
 ## 3. Modelo de datos y correlación
 
-Almacén propio `usage-ledger.sqlite` bajo el StateRoot de cada instalación,
+Almacén propio `usage-ledger.sqlite` bajo `UsageRoot`, fijado al StateRoot DEV,
 independiente de `state.json` y de las bases de conversaciones oficiales.
 Elegir un driver SQLite de Go puro, fijar versión y revisar licencia/dependencias
 antes de incorporarlo; no introducir una dependencia de DLL o CGO no cualificada.

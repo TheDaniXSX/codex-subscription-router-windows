@@ -6,12 +6,18 @@ Rama: `codex/usage-calibration`. Base de la app: Codex Windows 26.924.
 
 La instalación de desarrollo usa el acceso directo **Codex Subscription Router
 [DEV]** y el ejecutable `%LOCALAPPDATA%\CSR-Dev\app\ChatGPT.exe`.
-Su perfil, cuentas, bases de datos y registro de consumo viven en
-`%LOCALAPPDATA%\CSR-Dev\data`. El primer inicio requiere iniciar sesión en DEV.
+La actualización compartida conecta PROD y DEV al mismo registro de cuentas y
+al mismo historial/proyectos. El home primario es `%USERPROFILE%\.codex`; las
+cuentas secundarias conservan sus homes actuales dentro de los datos de PROD.
+Los perfiles Electron, puertos, tokens e identidad visual siguen separados.
 
-La app de producción mantiene su instalación habitual y puede seguir abierta.
-El historial de desarrollo comienza vacío; no se importan credenciales ni bases
-de conversaciones de producción.
+El ledger y las relaciones de calibración permanecen en
+`%LOCALAPPDATA%\CSR-Dev\data`. La anterior carpeta `PrimaryHome` de DEV se
+conserva. No se copian credenciales ni bases abiertas para sincronizarlas.
+
+**Activación inicial:** requiere sustituir ambos paquetes después de cerrar
+las dos apps. Hasta activar esa pareja, la DEV instalada anteriormente mantiene
+su historial aislado. Ver [datos compartidos y activación](SHARED-DESKTOP.md).
 
 ## Leer el consumo
 
@@ -42,8 +48,9 @@ suscripción. Un valor pendiente o desconocido no significa gasto cero.
 5. Comprobar la estimación en peticiones posteriores. Se conserva la predicción
    original de cada petición para poder compararla sin entrenar con su resultado.
 
-Si PROD u otro dispositivo usan la misma suscripción durante el intervalo, DEV
-no tiene el detalle de ese gasto externo. Dejar sin marcar ese grupo. Una lectura
+El servicio compartido registra en el ledger DEV las peticiones de ambos
+frontends, por lo que puede identificar los solapamientos de PROD y DEV. El uso
+desde otro dispositivo sigue siendo desconocido: dejar sin marcar ese grupo. Una lectura
 redondeada sin cambio mantiene el intervalo pendiente: su trabajo se acumula con
 las peticiones siguientes hasta obtener señal. Si cambia el grupo hay que volver
 a seleccionarlo. Un reset o datos incompletos también pueden impedir entrenar
@@ -60,7 +67,10 @@ aunque la marca esté activada; el detalle indica el motivo.
 - Cambiar la marca, cerrar DEV y reabrir: historial y selección persistentes.
 - Navegar entre chats y estrechar la ventana: controles asociados al turno correcto,
   accesibles por teclado y sin tapar el botón Worked for.
-- Usar PROD y DEV a la vez: identidad visual, puertos, perfiles y estado separados.
+- Usar PROD y DEV a la vez: cuentas, chats y proyectos compartidos; identidad,
+  puertos y perfiles separados. La calibración sólo aparece en DEV.
+- Abrir el mismo chat en ambas: sólo la ventana propietaria controla su turno
+  activo y recibe sus aprobaciones. La otra puede consultar sus actualizaciones.
 
 Se conservan hasta **5.000 turnos raíz finalizados**, con sus descendientes, sin
 límite por antigüedad. Los gráficos y alertas de cambios de consumo son una fase
@@ -74,6 +84,11 @@ aceptación del usuario con su sesión real ni certifican la precisión inicial 
 estimador: esta depende de las muestras seleccionadas.
 
 ## Reconstruir DEV desde esta rama
+
+Los comandos siguientes reconstruyen el canal aislado anterior (schema 2).
+Para la pareja compartida usar la preparación schema 3 de
+[SHARED-DESKTOP.md](SHARED-DESKTOP.md). No mezclar uno de cada tipo sobre los
+mismos datos.
 
 Desde el checkout de `codex/usage-calibration`, con Go, Node, Python y PowerShell
 7 disponibles y las dependencias de npm instaladas:

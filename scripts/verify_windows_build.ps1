@@ -1552,22 +1552,22 @@ try {
     }
     $schemaVersion = Get-JsonProperty -Object $manifest -Name 'schemaVersion'
     $schemaNumber = if ($null -ne $schemaVersion) { [int]$schemaVersion } else { 0 }
-    $schemaSupported = $schemaNumber -in @(1, 2) -and (-not $StrictSignatures -or $schemaNumber -eq 2)
+    $schemaSupported = $schemaNumber -in @(1, 2, 3) -and (-not $StrictSignatures -or $schemaNumber -in @(2, 3))
     Add-Check -Name 'Router build manifest schema is supported' -Passed (
         $schemaSupported
     ) -Detail $(
         if ($schemaNumber -eq 1 -and -not $StrictSignatures) { 'schemaVersion=1 (legacy compatibility only)' }
-        elseif ($schemaNumber -eq 2) { 'schemaVersion=2' }
-        else { "schemaVersion=$schemaVersion; release verification requires schemaVersion=2" }
+        elseif ($schemaNumber -in @(2, 3)) { "schemaVersion=$schemaNumber" }
+        else { "schemaVersion=$schemaVersion; release verification requires schemaVersion=2 or 3" }
     )
     if ($schemaNumber -eq 1 -and -not $StrictSignatures) {
         Add-WarningMessage 'Legacy schemaVersion 1 uses fixed port 48123 and is not eligible for release.'
     }
 
-    $controlPort = if ($schemaNumber -eq 2) {
+    $controlPort = if ($schemaNumber -ge 2) {
         [int](Get-JsonProperty -Object $manifest -Name 'controlPort')
     } else { 48123 }
-    $controlPortValid = if ($schemaNumber -eq 2) {
+    $controlPortValid = if ($schemaNumber -ge 2) {
         $controlPort -ge 49152 -and $controlPort -le 65535 -and $controlPort -ne 48123
     } else { $controlPort -eq 48123 -and -not $StrictSignatures }
     Add-Check -Name 'Build control port satisfies the release contract' -Passed $controlPortValid -Detail (
@@ -1587,7 +1587,7 @@ try {
     try {
         $launcherConfig = Get-Content -LiteralPath $launcherConfigPath -Raw | ConvertFrom-Json
         $launcherSchema = [int](Get-JsonProperty -Object $launcherConfig -Name 'schemaVersion')
-        $launcherPort = if ($launcherSchema -eq 2) { [int](Get-JsonProperty -Object $launcherConfig -Name 'controlPort') } else { 48123 }
+        $launcherPort = if ($launcherSchema -ge 2) { [int](Get-JsonProperty -Object $launcherConfig -Name 'controlPort') } else { 48123 }
         $launcherStateRoot = [string](Get-JsonProperty -Object $launcherConfig -Name 'stateRoot')
         $stateRootMatches = -not [string]::IsNullOrWhiteSpace($launcherStateRoot) -and
             (Get-NormalizedPath -Path $launcherStateRoot -AllowMissing).Equals(
@@ -1605,8 +1605,17 @@ try {
         $launcherChannel = [string](Get-JsonProperty -Object $launcherConfig -Name 'installChannel')
         if ([string]::IsNullOrWhiteSpace($launcherChannel)) { $launcherChannel = 'production' }
         $channelValid = $manifestChannel -cin @('production', 'development') -and $launcherChannel -ceq $manifestChannel
-        if ($manifestChannel -eq 'development') {
-            $expectedHome = Get-NormalizedPath -Path (Join-Path $StateRoot 'PrimaryHome') -AllowMissing
+        if ($schemaNumber -eq 3) {
+            foreach ($field in @('sharedStateRoot', 'sharedPrimaryHome', 'usageDataRoot', 'sharedProtocol', 'activationPairId')) {
+                $manifestValue = [string](Get-JsonProperty -Object $manifest -Name $field)
+                $launcherValue = [string](Get-JsonProperty -Object $launcherConfig -Name $field)
+                $channelValid = $channelValid -and -not [string]::IsNullOrWhiteSpace($manifestValue) -and $manifestValue -ceq $launcherValue
+            }
+            $channelValid = $channelValid -and [int](Get-JsonProperty -Object $manifest -Name 'sharedProtocol') -eq 1 -and
+                [string](Get-JsonProperty -Object $manifest -Name 'activationPairId') -cmatch '^[A-Za-z0-9_-]{8,128}$'
+        }
+        if ($manifestChannel -eq 'development' -or $schemaNumber -eq 3) {
+            $expectedHome = if ($schemaNumber -eq 3) { Get-NormalizedPath -Path ([string](Get-JsonProperty -Object $manifest -Name 'sharedPrimaryHome')) -AllowMissing } else { Get-NormalizedPath -Path (Join-Path $StateRoot 'PrimaryHome') -AllowMissing }
             foreach ($record in @($manifest, $launcherConfig)) {
                 foreach ($field in @('primaryCodexHome', 'primarySqliteHome')) {
                     $value = [string](Get-JsonProperty -Object $record -Name $field)
@@ -1614,15 +1623,26 @@ try {
                         (Get-NormalizedPath -Path $value -AllowMissing).Equals($expectedHome, [StringComparison]::OrdinalIgnoreCase)
                 }
             }
-            $identity = Get-JsonProperty -Object $manifest -Name 'windowsIntegrationIsolation'
-            $channelValid = $channelValid -and
-                ([string](Get-JsonProperty -Object $identity -Name 'appUserModelId')) -ceq 'com.openai.codex.subscription-router.dev' -and
-                ([string](Get-JsonProperty -Object $identity -Name 'displayName')) -ceq 'Codex Subscription Router [DEV]'
         }
         else {
             $channelValid = $channelValid -and
                 [string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $launcherConfig -Name 'primaryCodexHome')) -and
                 [string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $launcherConfig -Name 'primarySqliteHome'))
+        }
+        $identity = Get-JsonProperty -Object $manifest -Name 'windowsIntegrationIsolation'
+        $expectedIdentity = if ($manifestChannel -eq 'development') { 'com.openai.codex.subscription-router.dev' } else { 'com.openai.codex.subscription-router' }
+        $expectedName = if ($manifestChannel -eq 'development') { 'Codex Subscription Router [DEV]' } else { 'Codex Subscription Router' }
+        $recordedIdentity = [string](Get-JsonProperty -Object $identity -Name 'appUserModelId')
+        $recordedName = [string](Get-JsonProperty -Object $identity -Name 'displayName')
+        # Historical production manifests can predate channel/desktop-identity
+        # metadata. Preserve their non-release verification path, while every
+        # shared/development/explicit-channel or signed-release build stays bound.
+        $identityRequired = $schemaNumber -eq 3 -or $manifestChannel -eq 'development' -or $StrictSignatures -or
+            -not [string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $manifest -Name 'installChannel')) -or
+            -not [string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $launcherConfig -Name 'installChannel')) -or
+            -not [string]::IsNullOrWhiteSpace($recordedIdentity) -or -not [string]::IsNullOrWhiteSpace($recordedName)
+        if ($identityRequired) {
+            $channelValid = $channelValid -and $recordedIdentity -ceq $expectedIdentity -and $recordedName -ceq $expectedName
         }
         Add-Check -Name 'Installation channel binds private development homes and identity' -Passed $channelValid -Detail (
             "manifestChannel=$manifestChannel; launcherChannel=$launcherChannel"

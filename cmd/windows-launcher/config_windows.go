@@ -51,9 +51,23 @@ var stateRootEnvironmentPrecedence = []string{
 var strippedChildEnvironment = []string{
 	"CODEX_MUX_CONTROL_TOKEN",
 	"CODEX_MUX_UI_TESTS",
+	"CODEX_MUX_SHARED_ROOT",
+	"CODEX_MUX_USAGE_ROOT",
+	"CODEX_MUX_SHARED_PROTOCOL",
+	"CODEX_MUX_ACTIVATION_PAIR_ID",
+	"CODEX_MUX_INSTALL_CHANNEL",
+}
+
+type sharedBinding struct {
+	SharedStateRoot   string `json:"sharedStateRoot,omitempty"`
+	SharedPrimaryHome string `json:"sharedPrimaryHome,omitempty"`
+	UsageDataRoot     string `json:"usageDataRoot,omitempty"`
+	SharedProtocol    int    `json:"sharedProtocol,omitempty"`
+	ActivationPairID  string `json:"activationPairId,omitempty"`
 }
 
 type sidecarConfiguration struct {
+	sharedBinding
 	SchemaVersion     int    `json:"schemaVersion"`
 	StateRoot         string `json:"stateRoot"`
 	ControlPort       *int   `json:"controlPort,omitempty"`
@@ -63,6 +77,7 @@ type sidecarConfiguration struct {
 }
 
 type launchPlan struct {
+	sharedBinding
 	AppDirectory        string
 	RealApp             string
 	Mux                 string
@@ -81,6 +96,7 @@ type launchPlan struct {
 }
 
 type buildIdentity struct {
+	sharedBinding
 	SchemaVersion               int    `json:"schemaVersion"`
 	ProfilePath                 string `json:"profilePath"`
 	ControlPort                 int    `json:"controlPort"`
@@ -139,7 +155,16 @@ func buildLaunchPlan(
 	}
 	primaryCodexHome := ""
 	primarySQLiteHome := ""
-	if channel == developmentChannel {
+	if configuration.SchemaVersion == 3 {
+		if err := validateSharedBinding(configuration.sharedBinding); err != nil {
+			return launchPlan{}, err
+		}
+		primaryCodexHome = configuration.SharedPrimaryHome
+		primarySQLiteHome = configuration.SharedPrimaryHome
+		if !sameWindowsPath(configuration.PrimaryCodexHome, primaryCodexHome) || !sameWindowsPath(configuration.PrimarySQLiteHome, primarySQLiteHome) {
+			return launchPlan{}, errors.New("schema 3 primary homes must match sharedPrimaryHome")
+		}
+	} else if channel == developmentChannel {
 		primaryCodexHome, err = validatePrivateHome(stateRoot, configuration.PrimaryCodexHome, "primaryCodexHome")
 		if err != nil {
 			return launchPlan{}, err
@@ -154,11 +179,12 @@ func buildLaunchPlan(
 	}
 	appUserModelID, displayName := appIdentity(channel)
 	if configuration.SchemaVersion >= 2 {
-		if err := validateBuildIdentity(appDirectory, stateRoot, controlPort, channel, primaryCodexHome, primarySQLiteHome, appUserModelID, displayName, readOptionalBuildManifest); err != nil {
+		if err := validateBuildIdentity(appDirectory, stateRoot, controlPort, channel, primaryCodexHome, primarySQLiteHome, appUserModelID, displayName, readOptionalBuildManifest, configuration); err != nil {
 			return launchPlan{}, err
 		}
 	}
 	plan := launchPlan{
+		sharedBinding:       configuration.sharedBinding,
 		AppDirectory:        appDirectory,
 		RealApp:             filepath.Join(appDirectory, realAppName),
 		Mux:                 filepath.Join(appDirectory, muxRelativePath),
@@ -218,11 +244,19 @@ func resolveLauncherConfiguration(
 }
 
 func validateReleaseLaunchPlan(plan launchPlan) error {
-	if plan.ConfigSchemaVersion != 2 {
+	if plan.ConfigSchemaVersion != 2 && plan.ConfigSchemaVersion != 3 {
 		return fmt.Errorf(
-			"launcher configuration schema %d is diagnostic-only; reinstall or upgrade to schema 2",
+			"launcher configuration schema %d is diagnostic-only; reinstall or upgrade to schema 2 or 3",
 			plan.ConfigSchemaVersion,
 		)
+	}
+	if plan.ConfigSchemaVersion == 3 {
+		if err := validateSharedBinding(plan.sharedBinding); err != nil {
+			return err
+		}
+		if !sameWindowsPath(plan.PrimaryCodexHome, plan.SharedPrimaryHome) || !sameWindowsPath(plan.PrimarySQLiteHome, plan.SharedPrimaryHome) {
+			return errors.New("shared launch plan primary homes do not match")
+		}
 	}
 	if plan.ControlPort < minimumControlPort || plan.ControlPort > maximumControlPort {
 		return fmt.Errorf(
@@ -265,7 +299,7 @@ func sidecarInstallChannel(configuration sidecarConfiguration) (string, error) {
 	if channel != productionChannel && channel != developmentChannel {
 		return "", fmt.Errorf("unsupported installChannel %q", channel)
 	}
-	if channel == productionChannel && (configuration.PrimaryCodexHome != "" || configuration.PrimarySQLiteHome != "") {
+	if channel == productionChannel && configuration.SchemaVersion != 3 && (configuration.PrimaryCodexHome != "" || configuration.PrimarySQLiteHome != "") {
 		return "", errors.New("production sidecar must not declare private development primary homes")
 	}
 	if channel == developmentChannel && configuration.SchemaVersion < 2 {
@@ -295,6 +329,7 @@ func validateBuildIdentity(
 	controlPort int,
 	channel, codexHome, sqliteHome, appUserModelID, displayName string,
 	readOptional optionalFileReader,
+	configurations ...sidecarConfiguration,
 ) error {
 	path := filepath.Join(appDirectory, "codex-mux-build.json")
 	contents, exists, err := readOptional(path)
@@ -315,7 +350,7 @@ func validateBuildIdentity(
 	if manifestChannel != channel {
 		return fmt.Errorf("launcher sidecar channel %q does not match build manifest channel %q", channel, manifestChannel)
 	}
-	if manifest.SchemaVersion < 1 || manifest.SchemaVersion > 2 {
+	if manifest.SchemaVersion < 1 || manifest.SchemaVersion > 3 {
 		return fmt.Errorf("unsupported build manifest schema %d", manifest.SchemaVersion)
 	}
 	profile, err := validateAbsoluteRoot(manifest.ProfilePath)
@@ -325,10 +360,22 @@ func validateBuildIdentity(
 	if manifest.ControlPort != 0 && manifest.ControlPort != controlPort {
 		return errors.New("launcher sidecar controlPort does not match the build manifest")
 	}
-	if manifest.SchemaVersion == 2 && manifest.ControlPort == 0 {
+	if manifest.SchemaVersion >= 2 && manifest.ControlPort == 0 {
 		return errors.New("build manifest is missing its controlPort")
 	}
-	if channel == developmentChannel {
+	if manifest.SchemaVersion == 3 {
+		if len(configurations) != 1 || configurations[0].SchemaVersion != 3 || configurations[0].sharedBinding != manifest.sharedBinding {
+			return errors.New("launcher shared binding, activation pair, or protocol does not match the build manifest")
+		}
+		if err := validateSharedBinding(manifest.sharedBinding); err != nil {
+			return err
+		}
+		if !sameWindowsPath(manifest.PrimaryCodexHome, codexHome) || !sameWindowsPath(manifest.PrimarySQLiteHome, sqliteHome) {
+			return errors.New("launcher shared primary homes do not match the build manifest")
+		}
+	} else if len(configurations) == 1 && configurations[0].SchemaVersion == 3 {
+		return errors.New("schema 3 launcher requires schema 3 build manifest")
+	} else if channel == developmentChannel {
 		manifestCodexHome, homeErr := validatePrivateHome(stateRoot, manifest.PrimaryCodexHome, "manifest primaryCodexHome")
 		manifestSQLiteHome, sqliteErr := validatePrivateHome(stateRoot, manifest.PrimarySQLiteHome, "manifest primarySqliteHome")
 		if homeErr != nil || sqliteErr != nil ||
@@ -343,6 +390,23 @@ func validateBuildIdentity(
 	return nil
 }
 
+func validateSharedBinding(binding sharedBinding) error {
+	if binding.SharedProtocol != 1 || len(binding.ActivationPairID) < 8 || len(binding.ActivationPairID) > 128 {
+		return errors.New("shared binding requires protocol 1 and an activation pair id of 8..128 characters")
+	}
+	for _, value := range binding.ActivationPairID {
+		if !(value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9' || value == '-' || value == '_') {
+			return errors.New("activation pair id contains invalid characters")
+		}
+	}
+	for label, path := range map[string]string{"sharedStateRoot": binding.SharedStateRoot, "sharedPrimaryHome": binding.SharedPrimaryHome, "usageDataRoot": binding.UsageDataRoot} {
+		if _, err := validateAbsoluteRoot(path); err != nil {
+			return fmt.Errorf("validate %s: %w", label, err)
+		}
+	}
+	return nil
+}
+
 // runReleaseLaunch is the single barrier before any mutable launch work or
 // process creation. Keeping the callback behind validation makes the no-spawn
 // guarantee independently testable without starting a synthetic or real app.
@@ -350,10 +414,30 @@ func runReleaseLaunch(plan launchPlan, launch func() error) error {
 	if err := validateReleaseLaunchPlan(plan); err != nil {
 		return err
 	}
+	if plan.ConfigSchemaVersion == 3 {
+		if err := validateSharedActivation(plan, readOptionalFile); err != nil {
+			return err
+		}
+	}
 	if launch == nil {
 		return errors.New("release launch callback is nil")
 	}
 	return launch()
+}
+
+func validateSharedActivation(plan launchPlan, readOptional optionalFileReader) error {
+	contents, exists, err := readOptional(filepath.Join(plan.SharedStateRoot, "shared-activation.json"))
+	if err != nil {
+		return fmt.Errorf("read shared activation barrier: %w", err)
+	}
+	var activation struct {
+		PairID string `json:"pairId"`
+		State  string `json:"state"`
+	}
+	if !exists || json.Unmarshal(contents, &activation) != nil || activation.PairID != plan.ActivationPairID || activation.State != "committed" {
+		return errors.New("shared desktop pair is not committed; finish or recover the paired activation before launching")
+	}
+	return nil
 }
 
 // normalizeRouterArguments turns the router's private protocol into the same
@@ -554,7 +638,7 @@ func decodeSidecar(contents []byte) (sidecarConfiguration, error) {
 		if configuration.ControlPort != nil {
 			return sidecarConfiguration{}, errors.New("schemaVersion 1 must not contain controlPort")
 		}
-	case 2:
+	case 2, 3:
 		if configuration.ControlPort == nil {
 			return sidecarConfiguration{}, errors.New("schemaVersion 2 requires controlPort")
 		}
@@ -567,6 +651,13 @@ func decodeSidecar(contents []byte) (sidecarConfiguration, error) {
 	default:
 		return sidecarConfiguration{}, fmt.Errorf("unsupported schemaVersion %d", configuration.SchemaVersion)
 	}
+	if configuration.SchemaVersion == 3 {
+		if err := validateSharedBinding(configuration.sharedBinding); err != nil {
+			return sidecarConfiguration{}, err
+		}
+	} else if configuration.sharedBinding != (sharedBinding{}) {
+		return sidecarConfiguration{}, errors.New("shared binding requires schemaVersion 3")
+	}
 	return configuration, nil
 }
 
@@ -574,7 +665,7 @@ func sidecarControlPort(configuration sidecarConfiguration) (int, error) {
 	if configuration.SchemaVersion == 1 && configuration.ControlPort == nil {
 		return legacyControlPort, nil
 	}
-	if configuration.SchemaVersion != 2 || configuration.ControlPort == nil {
+	if (configuration.SchemaVersion != 2 && configuration.SchemaVersion != 3) || configuration.ControlPort == nil {
 		return 0, errors.New("controlPort is unavailable for this sidecar schema")
 	}
 	port := *configuration.ControlPort
@@ -709,9 +800,16 @@ func childEnvironment(environment []string, plan launchPlan) []string {
 		controlPortEnvironment:          strconv.Itoa(plan.ControlPort),
 		appshotsEnvironment:             appshots,
 	}
-	if plan.InstallChannel == developmentChannel {
+	if plan.InstallChannel == developmentChannel || plan.ConfigSchemaVersion == 3 {
 		replacements["CODEX_HOME"] = plan.PrimaryCodexHome
 		replacements["CODEX_SQLITE_HOME"] = plan.PrimarySQLiteHome
+	}
+	if plan.ConfigSchemaVersion == 3 {
+		replacements["CODEX_MUX_SHARED_ROOT"] = plan.SharedStateRoot
+		replacements["CODEX_MUX_USAGE_ROOT"] = plan.UsageDataRoot
+		replacements["CODEX_MUX_SHARED_PROTOCOL"] = strconv.Itoa(plan.SharedProtocol)
+		replacements["CODEX_MUX_ACTIVATION_PAIR_ID"] = plan.ActivationPairID
+		replacements["CODEX_MUX_INSTALL_CHANNEL"] = plan.InstallChannel
 	}
 	return environmentWith(sanitized, replacements)
 }

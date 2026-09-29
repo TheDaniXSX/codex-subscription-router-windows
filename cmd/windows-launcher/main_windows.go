@@ -43,9 +43,15 @@ func main() {
 		fmt.Fprintf(os.Stdout, "install_channel=%s\n", plan.InstallChannel)
 		fmt.Fprintf(os.Stdout, "app_user_model_id=%s\n", plan.AppUserModelID)
 		fmt.Fprintf(os.Stdout, "display_name=%s\n", plan.DisplayName)
-		if plan.InstallChannel == developmentChannel {
+		if plan.InstallChannel == developmentChannel || plan.ConfigSchemaVersion == 3 {
 			fmt.Fprintf(os.Stdout, "primary_codex_home=%s\n", plan.PrimaryCodexHome)
 			fmt.Fprintf(os.Stdout, "primary_sqlite_home=%s\n", plan.PrimarySQLiteHome)
+		}
+		if plan.ConfigSchemaVersion == 3 {
+			fmt.Fprintf(os.Stdout, "shared_state_root=%s\n", plan.SharedStateRoot)
+			fmt.Fprintf(os.Stdout, "usage_data_root=%s\n", plan.UsageDataRoot)
+			fmt.Fprintf(os.Stdout, "shared_protocol=%d\n", plan.SharedProtocol)
+			fmt.Fprintf(os.Stdout, "activation_pair_id=%s\n", plan.ActivationPairID)
 		}
 		fmt.Fprintf(os.Stdout, "real_app=%s\n", plan.RealApp)
 		fmt.Fprintf(os.Stdout, "mux=%s\n", plan.Mux)
@@ -69,7 +75,7 @@ func main() {
 		if err := os.MkdirAll(plan.Profile, 0o700); err != nil {
 			return fmt.Errorf("create isolated profile %s: %w", plan.Profile, err)
 		}
-		if plan.InstallChannel == developmentChannel {
+		if plan.InstallChannel == developmentChannel && plan.ConfigSchemaVersion != 3 {
 			for label, path := range map[string]string{
 				"primary Codex home":  plan.PrimaryCodexHome,
 				"primary SQLite home": plan.PrimarySQLiteHome,

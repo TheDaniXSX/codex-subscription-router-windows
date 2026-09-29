@@ -235,6 +235,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--destination", type=Path)
     parser.add_argument("--state-root", type=Path, help="Explicit private router state directory.")
+    parser.add_argument("--shared-state-root", type=Path)
+    parser.add_argument("--shared-primary-home", type=Path)
+    parser.add_argument("--usage-data-root", type=Path)
+    parser.add_argument("--shared-protocol", type=int)
+    parser.add_argument("--activation-pair-id")
+    parser.add_argument("--prepare-only", action="store_true", help="Retain a final-destination-bound candidate without installing.")
+    parser.add_argument("--prepared-destination", type=Path, help="New directory to retain the prepared payload.")
     parser.add_argument(
         "--install-channel",
         choices=(PRODUCTION_CHANNEL, DEVELOPMENT_CHANNEL),
@@ -1611,7 +1618,7 @@ def _prepare_account_component(token: str, control_port: int) -> str:
     return component.replace(old_methods, new_methods, 1)
 
 
-def patch_windows_renderer(extracted: Path, token: str, control_port: int) -> None:
+def patch_windows_renderer(extracted: Path, token: str, control_port: int, *, calibration_enabled: bool = True) -> None:
     if _is_split_renderer(extracted):
         import importlib.util
         renderer_module = "windows_renderer_26903" if _is_26903(extracted) or _is_26908(extracted) or _is_26911(extracted) else "windows_renderer_26901"
@@ -1628,7 +1635,10 @@ def patch_windows_renderer(extracted: Path, token: str, control_port: int) -> No
             raise RuntimeError("could not load the split renderer compatibility module")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        module.patch_renderer(extracted, token, control_port)
+        if renderer_module == "windows_renderer_26924":
+            module.patch_renderer(extracted, token, control_port, calibration_enabled=calibration_enabled)
+        else:
+            module.patch_renderer(extracted, token, control_port)
         return
     webview = extracted / "webview"
     index_path = webview / "index.html"
@@ -1850,6 +1860,8 @@ def patch_extracted_asar(
     token: str,
     control_port: int,
     install_channel: str = PRODUCTION_CHANNEL,
+    *,
+    shared_mode: bool = False,
 ) -> None:
     verify_windows_integration_isolation(extracted)
     patch_windows_bootstrap(extracted, install_channel)
@@ -1857,7 +1869,19 @@ def patch_extracted_asar(
     patch_windows_native_messaging_isolation(extracted)
     patch_windows_appshots_gate(extracted)
     verify_windows_appshots_contract(extracted)
-    patch_windows_renderer(extracted, token, control_port)
+    if shared_mode:
+        if not _is_26924(extracted):
+            raise RuntimeError("shared desktop state currently requires the qualified Codex 26.924 profile")
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("windows_shared_state", PROJECT_ROOT / "scripts" / "windows_shared_state.py")
+        if spec is None or spec.loader is None:
+            raise RuntimeError("could not load the shared desktop state patch")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.patch_shared_global_state(extracted)
+        patch_windows_renderer(extracted, token, control_port, calibration_enabled=install_channel == DEVELOPMENT_CHANNEL)
+    else:
+        patch_windows_renderer(extracted, token, control_port)
 
 
 def repack_asar(
@@ -2035,6 +2059,7 @@ def write_build_manifest(
     backup_path: Path | None = None,
     control_port: int | None = None,
     install_channel: str = PRODUCTION_CHANNEL,
+    shared_binding: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if install_channel not in (PRODUCTION_CHANNEL, DEVELOPMENT_CHANNEL):
         raise RuntimeError(f"unsupported installation channel: {install_channel}")
@@ -2052,6 +2077,9 @@ def write_build_manifest(
 
     primary_codex_home = state_root / "PrimaryHome" if install_channel == DEVELOPMENT_CHANNEL else None
     primary_sqlite_home = state_root / "PrimaryHome" if install_channel == DEVELOPMENT_CHANNEL else None
+    if shared_binding:
+        primary_codex_home = Path(str(shared_binding["sharedPrimaryHome"]))
+        primary_sqlite_home = primary_codex_home
     app_user_model_id = (
         DEVELOPMENT_APP_USER_MODEL_ID
         if install_channel == DEVELOPMENT_CHANNEL
@@ -2076,6 +2104,10 @@ def write_build_manifest(
                 "primarySqliteHome": str(primary_sqlite_home),
             }
         )
+    if shared_binding:
+        launcher_configuration.update(shared_binding)
+        launcher_configuration.update(schemaVersion=3, installChannel=install_channel,
+                                      primaryCodexHome=str(primary_codex_home), primarySqliteHome=str(primary_sqlite_home))
     launcher_config_temporary.write_text(
         json.dumps(
             launcher_configuration,
@@ -2142,6 +2174,9 @@ def write_build_manifest(
         },
     }
     path = staged_app / BUILD_MANIFEST_NAME
+    if shared_binding:
+        manifest.update(shared_binding)
+        manifest.update(schemaVersion=3, calibrationEnabled=install_channel == DEVELOPMENT_CHANNEL)
     temporary = staged_app / f".{BUILD_MANIFEST_NAME}.{uuid.uuid4().hex}.tmp"
     temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, path)
@@ -2211,6 +2246,76 @@ def validate_windows_path_budget(source_app: Path, destination: Path, staged_app
                 )
 
 
+def ensure_disjoint_paths(left: Path, right: Path) -> None:
+    left, right = _canonical(left), _canonical(right)
+    if _is_relative_to(left, right) or _is_relative_to(right, left):
+        raise RuntimeError(f"paths must not overlap: {left} and {right}")
+
+
+def validate_shared_binding(
+    shared_state_root: Path | None, shared_primary_home: Path | None,
+    usage_data_root: Path | None, shared_protocol: int | None, activation_pair_id: str | None,
+) -> dict[str, object] | None:
+    values = (shared_state_root, shared_primary_home, usage_data_root, shared_protocol, activation_pair_id)
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values) or shared_protocol != 1:
+        raise ValueError("shared binding requires all three paths, shared protocol 1, and activation pair id")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", str(activation_pair_id)):
+        raise ValueError("activation pair id must contain 8..128 ASCII letters, digits, underscores or hyphens")
+    paths = [Path(str(value)).expanduser() for value in values[:3]]
+    if any(not value.is_absolute() for value in paths):
+        raise ValueError("shared binding paths must be absolute")
+    paths = [value.resolve(strict=False) for value in paths]
+    for index, left in enumerate(paths):
+        for right in paths[index + 1:]:
+            ensure_disjoint_paths(left, right)
+    return dict(zip(("sharedStateRoot", "sharedPrimaryHome", "usageDataRoot"), map(str, paths))) | {
+        "sharedProtocol": shared_protocol, "activationPairId": activation_pair_id,
+    }
+
+
+def validate_prepared_destination(
+    prepare_only: bool, prepared: Path | None, dry_run: bool, source: Path,
+    destination: Path, state_root: Path, binding: dict[str, object] | None,
+) -> Path | None:
+    if not prepare_only and prepared is None:
+        return None
+    if not prepare_only or prepared is None or dry_run:
+        raise ValueError("--prepare-only requires --prepared-destination and cannot be combined with --dry-run")
+    if not prepared.is_absolute():
+        raise ValueError("prepared destination must be absolute")
+    prepared = prepared.expanduser().resolve(strict=False)
+    if prepared.anchor.casefold() != destination.resolve(strict=False).anchor.casefold():
+        raise ValueError("prepared payload and final destination must be on the same volume for atomic activation")
+    if prepared.exists():
+        raise RuntimeError("prepared destination must not already exist")
+    boundaries = [source, destination, state_root]
+    if binding:
+        boundaries += [Path(str(binding[field])) for field in ("sharedStateRoot", "sharedPrimaryHome", "usageDataRoot")]
+    for boundary in boundaries:
+        ensure_disjoint_paths(prepared, boundary)
+    return prepared
+
+
+def protect_prepared_directory(path: Path) -> None:
+    """The candidate embeds a control token; protect it before writing secrets."""
+    if os.name != "nt":
+        path.chmod(0o700)
+        return
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if not powershell:
+        raise RuntimeError("PowerShell is required to protect the prepared payload ACL")
+    script = r"""
+$ErrorActionPreference = 'Stop'
+Import-Module $env:CSR_PREPARED_LIFECYCLE_MODULE -Force
+[void](Set-CsrPrivateDirectoryAcl -Path $env:CSR_PREPARED_ACL_PATH)
+"""
+    subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-Command", script],
+                   check=True, env={**os.environ, "CSR_PREPARED_ACL_PATH": str(path),
+                                    "CSR_PREPARED_LIFECYCLE_MODULE": str(PROJECT_ROOT / "scripts/WindowsLifecycle.psm1")})
+
+
 def patch_app(
     source_path: Path | None,
     destination: Path,
@@ -2223,6 +2328,13 @@ def patch_app(
     control_port: int | None = None,
     install_channel: str = PRODUCTION_CHANNEL,
     state_root_path: Path | None = None,
+    shared_state_root: Path | None = None,
+    shared_primary_home: Path | None = None,
+    usage_data_root: Path | None = None,
+    shared_protocol: int | None = None,
+    activation_pair_id: str | None = None,
+    prepare_only: bool = False,
+    prepared_destination: Path | None = None,
 ) -> dict[str, object]:
     if install_channel not in (PRODUCTION_CHANNEL, DEVELOPMENT_CHANNEL):
         raise RuntimeError(f"unsupported installation channel: {install_channel}")
@@ -2235,7 +2347,14 @@ def patch_app(
     validate_source_destination(source.app_root, state_root)
     validate_install_channel_paths(destination, state_root, install_channel)
     validate_approved_source(source, allow_untested_source)
-    if destination.exists() and not force:
+    shared_binding = validate_shared_binding(shared_state_root, shared_primary_home, usage_data_root, shared_protocol, activation_pair_id)
+    if shared_binding:
+        for field in ("sharedStateRoot", "sharedPrimaryHome", "usageDataRoot"):
+            value = Path(str(shared_binding[field]))
+            validate_source_destination(source.app_root, value)
+            ensure_disjoint_paths(destination, value)
+    prepared_destination = validate_prepared_destination(prepare_only, prepared_destination, dry_run, source.app_root, destination, state_root, shared_binding)
+    if destination.exists() and not force and not prepare_only:
         raise RuntimeError(f"destination exists: {destination} (pass --force for a recoverable backup)")
 
     print(
@@ -2244,7 +2363,9 @@ def patch_app(
     )
     asar = ensure_asar_tool()
     token, token_is_new = prepare_control_token(state_root)
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    installed_manifest_hash = sha256_file(destination / BUILD_MANIFEST_NAME) if (destination / BUILD_MANIFEST_NAME).is_file() else None
+    staging_parent = prepared_destination.parent if prepared_destination is not None else destination.parent
+    staging_parent.mkdir(parents=True, exist_ok=True)
 
     token_persisted = False
     state_root_preexisted = state_root.exists()
@@ -2253,13 +2374,17 @@ def patch_app(
         # staging segment for the exact **/{...} unpack pattern. Keep the
         # prefix short: staging sits beside the destination. Validate the actual
         # source tree below before copying; newer CUA payloads can grow paths.
-        prefix="csr-stg-", dir=destination.parent
+        prefix="csr-stg-", dir=staging_parent
     ) as temporary:
         temporary_path = Path(temporary)
-        staged_app = temporary_path / destination.name
+        if prepare_only:
+            protect_prepared_directory(temporary_path)
+        staged_app = temporary_path / ("app" if prepare_only else destination.name)
         extracted = temporary_path / "asar"
         repacked = temporary_path / "app.asar"
         validate_windows_path_budget(source.app_root, destination, staged_app)
+        if prepared_destination is not None:
+            validate_windows_path_budget(source.app_root, prepared_destination, staged_app)
         mux = prepare_executable(
             mux_path,
             temporary_path / "codex-mux.exe",
@@ -2281,7 +2406,10 @@ def patch_app(
         patch_owl_config(staged_app)
         run([str(asar), "extract", str(staged_app / "resources" / "app.asar"), str(extracted)])
         print("Validating and patching ASAR anchors…")
-        patch_extracted_asar(extracted, token, selected_control_port, install_channel)
+        if shared_binding:
+            patch_extracted_asar(extracted, token, selected_control_port, install_channel, shared_mode=True)
+        else:
+            patch_extracted_asar(extracted, token, selected_control_port, install_channel)
         official_unpacked_files = tuple(
             tree_file_hashes(staged_app / "resources" / "app.asar.unpacked").keys()
         )
@@ -2293,7 +2421,10 @@ def patch_app(
         ])
         if source.asar_version in {"26.903.61454", "26.903.71938", "26.908.40834", "26.911.61220", "26.915.31945", "26.917.51856", "26.924.22138"}:
             print("Verifying the packed profile menu and expanded routing selector…")
-            run([node, str(PROJECT_ROOT / "tests/windows/profile-menu-render.cjs"), str(repacked)])
+            render_arguments = [node, str(PROJECT_ROOT / "tests/windows/profile-menu-render.cjs"), str(repacked)]
+            if shared_binding and install_channel == PRODUCTION_CHANNEL:
+                render_arguments.append("--without-calibration")
+            run(render_arguments)
         install_repacked_asar(staged_app, repacked, unpacked)
         swap_executables(staged_app, mux, launcher)
         desktop_integrity = (
@@ -2304,8 +2435,9 @@ def patch_app(
         if desktop_integrity is not None:
             preservation["desktopIntegrity"] = desktop_integrity
         planned_backup = (
-            plan_backup_path(destination) if destination.exists() and not dry_run else None
+            plan_backup_path(destination) if destination.exists() and not dry_run and not prepare_only else None
         )
+        binding_args = {"shared_binding": shared_binding} if shared_binding else {}
         manifest = write_build_manifest(
             staged_app,
             source,
@@ -2317,12 +2449,32 @@ def patch_app(
             planned_backup,
             selected_control_port,
             install_channel,
+            **binding_args,
         )
 
         if dry_run:
             manifest["dryRun"] = True
             print("Dry run completed; destination and state were not changed.")
             return manifest
+
+        if prepared_destination is not None:
+            receipt = {
+                "schemaVersion": 1,
+                "destination": str(destination),
+                "stateRoot": str(state_root),
+                "activationPairId": activation_pair_id,
+                "controlTokenSha256": hashlib.sha256(token.encode("utf-8")).hexdigest(),
+                "controlTokenIsNew": token_is_new,
+                "expectedInstalledManifestSha256": installed_manifest_hash,
+                "preparedManifestSha256": sha256_file(staged_app / BUILD_MANIFEST_NAME),
+            }
+            if token_is_new:
+                (staged_app / "resources/codex-router/prepared-control-token").write_text(token + "\n", encoding="utf-8")
+            (staged_app / "codex-mux-prepared.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            protect_prepared_directory(staged_app)
+            staged_app.rename(prepared_destination)
+            print(f"Prepared: {prepared_destination}; activation destination: {destination}")
+            return {**manifest, "preparedDestination": str(prepared_destination), "prepareOnly": True}
 
         try:
             if token_is_new:
@@ -2363,6 +2515,13 @@ def main(argv: list[str] | None = None) -> int:
             control_port=args.control_port,
             install_channel=args.install_channel,
             state_root_path=args.state_root,
+            shared_state_root=args.shared_state_root,
+            shared_primary_home=args.shared_primary_home,
+            usage_data_root=args.usage_data_root,
+            shared_protocol=args.shared_protocol,
+            activation_pair_id=args.activation_pair_id,
+            prepare_only=args.prepare_only,
+            prepared_destination=args.prepared_destination,
         )
     except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"patch failed: {error}", file=sys.stderr)

@@ -3,7 +3,12 @@
 Fecha: 2026-09-29. Rama: `codex/usage-calibration`.
 PR de desarrollo: <https://github.com/TheDaniXSX/codex-subscription-router-windows/pull/10>.
 
-## Build instalada
+## Build aislada instalada antes de compartir datos
+
+Este apartado documenta la entrega anterior. El cambio posterior para compartir
+proyectos, chats y cuentas se registra por separado en
+[SHARED-DESKTOP.md](SHARED-DESKTOP.md); preparar los paquetes nuevos no implica
+que ya estén activos en las aplicaciones abiertas.
 
 La app se compiló desde `ad3a6fcb34ecb14da02732f6c28a3677b0c25e96`, con checkout
 limpio. El ajuste posterior para rutas abreviadas de Windows afecta a las

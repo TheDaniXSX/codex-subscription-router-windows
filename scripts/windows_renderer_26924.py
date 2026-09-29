@@ -104,7 +104,7 @@ def _patch_turn_usage(assets: Path, root: Path, token: str, control_port: int) -
     turn_path.write_text(turn, encoding="utf-8")
 
 
-def patch_renderer(extracted: Path, token: str, control_port: int) -> None:
+def patch_renderer(extracted: Path, token: str, control_port: int, *, calibration_enabled: bool = True) -> None:
     if json.loads((extracted / "package.json").read_text(encoding="utf-8"))["version"] != "26.924.22138":
         raise RuntimeError("Unsupported 26.924 renderer version")
     assets = extracted / "webview" / "assets"
@@ -360,4 +360,5 @@ def patch_renderer(extracted: Path, token: str, control_port: int) -> None:
     # turnId that the app-server uses for attribution. Keep the controls beside
     # the disclosure button, as siblings, and attach the usage component to the
     # native 26.924 collapsible activity row.
-    _patch_turn_usage(assets, root, token, control_port)
+    if calibration_enabled:
+        _patch_turn_usage(assets, root, token, control_port)

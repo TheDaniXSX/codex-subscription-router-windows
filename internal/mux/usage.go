@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,10 +47,22 @@ func (m *Multiplexer) initUsage() {
 	if !m.requestSpending {
 		return
 	}
-	relations, relationErr := newUsageRelationsState(filepath.Join(m.store.Root(), "usage-relations.json"))
+	root := strings.TrimSpace(m.usageRoot)
+	if root == "" {
+		root = m.store.Root()
+	}
+	resolvedRoot, err := filepath.Abs(root)
+	if err != nil {
+		m.usageError(err)
+		return
+	}
+	m.usageRoot = resolvedRoot
+	// Explicit telemetry paths never fall back on failure: doing so would
+	// silently write DEV calibration into the shared production store.
+	relations, relationErr := newUsageRelationsState(filepath.Join(m.usageRoot, "usage-relations.json"))
 	m.usageRelations = relations
 	m.usageError(relationErr)
-	ledger, err := usage.Open(filepath.Join(m.store.Root(), "usage-ledger.sqlite"), usage.Options{})
+	ledger, err := usage.Open(filepath.Join(m.usageRoot, "usage-ledger.sqlite"), usage.Options{})
 	if err != nil {
 		m.usageError(err)
 		return
