@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -30,6 +31,25 @@ func schema2Sidecar(stateRoot string, controlPort int) optionalFileReader {
 			`{"schemaVersion":2,"stateRoot":%q,"controlPort":%d}`,
 			stateRoot, controlPort,
 		)), true, nil
+	}
+}
+
+func schema2BuildIdentity(stateRoot string, controlPort int, channel string) []byte {
+	appUserModelID, displayName := appIdentity(channel)
+	return []byte(fmt.Sprintf(
+		`{"schemaVersion":2,"profilePath":%q,"controlPort":%d,"installChannel":%q,"windowsIntegrationIsolation":{"appUserModelId":%q,"displayName":%q}}`,
+		filepath.Join(stateRoot, profileDirectoryName), controlPort, channel, appUserModelID, displayName,
+	))
+}
+
+func validProductionLaunchPlan(controlPort int) launchPlan {
+	appUserModelID, displayName := appIdentity(productionChannel)
+	return launchPlan{
+		ConfigSchemaVersion: 2,
+		ControlPort:         controlPort,
+		InstallChannel:      productionChannel,
+		AppUserModelID:      appUserModelID,
+		DisplayName:         displayName,
 	}
 }
 
@@ -69,7 +89,7 @@ func TestResolveStateRootUsesVersionedSidecar(t *testing.T) {
 }
 
 func TestResolveLauncherConfigurationUsesCanonicalSidecarRootAndPort(t *testing.T) {
-	root, source, port, schema, err := resolveLauncherConfiguration(
+	configuration, source, err := resolveLauncherConfiguration(
 		`C:\Router`,
 		testLookup(map[string]string{"CODEX_ROUTER_DATA_DIR": `E:\Override State`}),
 		schema2Sidecar(`D:\Persisted State`, 61234),
@@ -77,8 +97,12 @@ func TestResolveLauncherConfigurationUsesCanonicalSidecarRootAndPort(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if root != `D:\Persisted State` || source != "sidecar:"+sidecarRelativePath || port != 61234 || schema != 2 {
-		t.Fatalf("unexpected resolved configuration: root=%q source=%q port=%d schema=%d", root, source, port, schema)
+	port, err := sidecarControlPort(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.StateRoot != `D:\Persisted State` || source != "sidecar:"+sidecarRelativePath || port != 61234 || configuration.SchemaVersion != 2 {
+		t.Fatalf("unexpected resolved configuration: root=%q source=%q port=%d schema=%d", configuration.StateRoot, source, port, configuration.SchemaVersion)
 	}
 }
 
@@ -94,10 +118,7 @@ func TestValidateReleaseLaunchPlanRejectsLegacyAndInvalidPorts(t *testing.T) {
 			}
 		})
 	}
-	if err := validateReleaseLaunchPlan(launchPlan{
-		ConfigSchemaVersion: 2,
-		ControlPort:         minimumControlPort,
-	}); err != nil {
+	if err := validateReleaseLaunchPlan(validProductionLaunchPlan(minimumControlPort)); err != nil {
 		t.Fatalf("valid release plan was rejected: %v", err)
 	}
 }
@@ -121,10 +142,7 @@ func TestRunReleaseLaunchRejectsLegacyBeforeSpawnCallback(t *testing.T) {
 
 func TestRunReleaseLaunchInvokesCallbackOnlyAfterValidPlan(t *testing.T) {
 	spawnAttempts := 0
-	err := runReleaseLaunch(launchPlan{
-		ConfigSchemaVersion: 2,
-		ControlPort:         minimumControlPort,
-	}, func() error {
+	err := runReleaseLaunch(validProductionLaunchPlan(minimumControlPort), func() error {
 		spawnAttempts++
 		return nil
 	})
@@ -137,7 +155,7 @@ func TestRunReleaseLaunchInvokesCallbackOnlyAfterValidPlan(t *testing.T) {
 }
 
 func TestResolveLauncherConfigurationAcceptsLegacySidecarForDiagnostics(t *testing.T) {
-	root, source, port, schema, err := resolveLauncherConfiguration(
+	configuration, source, err := resolveLauncherConfiguration(
 		`C:\Router`,
 		testLookup(nil),
 		func(string) ([]byte, bool, error) {
@@ -147,13 +165,17 @@ func TestResolveLauncherConfigurationAcceptsLegacySidecarForDiagnostics(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if root != `D:\Legacy` || source != "sidecar:"+sidecarRelativePath || port != legacyControlPort || schema != 1 {
-		t.Fatalf("unexpected legacy configuration: root=%q source=%q port=%d schema=%d", root, source, port, schema)
+	port, err := sidecarControlPort(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.StateRoot != `D:\Legacy` || source != "sidecar:"+sidecarRelativePath || port != legacyControlPort || configuration.SchemaVersion != 1 {
+		t.Fatalf("unexpected legacy configuration: root=%q source=%q port=%d schema=%d", configuration.StateRoot, source, port, configuration.SchemaVersion)
 	}
 }
 
 func TestResolveLauncherConfigurationRequiresSidecar(t *testing.T) {
-	_, _, _, _, err := resolveLauncherConfiguration(
+	_, _, err := resolveLauncherConfiguration(
 		`C:\Router`,
 		testLookup(map[string]string{"LOCALAPPDATA": `C:\Users\Test\AppData\Local`}),
 		missingSidecar,
@@ -214,11 +236,23 @@ func TestResolveStateRootEnvironmentSkipsInvalidSidecar(t *testing.T) {
 
 func TestBuildLaunchPlanPreservesDeepLinksAndAddsProfile(t *testing.T) {
 	seen := map[string]bool{}
+	appDirectory := filepath.Join(t.TempDir(), "Router")
+	stateRoot := filepath.Join(t.TempDir(), "Router State")
+	if err := os.MkdirAll(appDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(appDirectory, "codex-mux-build.json"),
+		schema2BuildIdentity(stateRoot, 61234, productionChannel),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
 	plan, err := buildLaunchPlan(
-		`C:\Router\ChatGPT.exe`,
+		filepath.Join(appDirectory, "ChatGPT.exe"),
 		[]string{`codex://thread/abc?value=two%20words`, `two words`, `quote"inside`},
-		testLookup(map[string]string{"CODEX_MUX_HOME": `D:\Router State`}),
-		schema2Sidecar(`D:\Router State`, 61234),
+		testLookup(map[string]string{"CODEX_MUX_HOME": stateRoot}),
+		schema2Sidecar(stateRoot, 61234),
 		func(path string) error {
 			seen[path] = true
 			return nil
@@ -228,7 +262,7 @@ func TestBuildLaunchPlanPreservesDeepLinksAndAddsProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectedArguments := []string{
-		`--user-data-dir=D:\Router State\Profile`,
+		"--user-data-dir=" + filepath.Join(stateRoot, profileDirectoryName),
 		`codex://thread/abc?value=two%20words`,
 		`two words`,
 		`quote"inside`,
@@ -239,9 +273,9 @@ func TestBuildLaunchPlanPreservesDeepLinksAndAddsProfile(t *testing.T) {
 	if plan.ControlPort != 61234 || plan.ConfigSchemaVersion != 2 {
 		t.Fatalf("unexpected port contract: port=%d schema=%d", plan.ControlPort, plan.ConfigSchemaVersion)
 	}
-	if !seen[`C:\Router\ChatGPT.real.exe`] ||
-		!seen[`C:\Router\resources\codex.exe`] ||
-		!seen[`C:\Router\resources\codex.real.exe`] {
+	if !seen[filepath.Join(appDirectory, realAppName)] ||
+		!seen[filepath.Join(appDirectory, muxRelativePath)] ||
+		!seen[filepath.Join(appDirectory, realCodexRelative)] {
 		t.Fatalf("did not validate every sibling executable: %#v", seen)
 	}
 }
@@ -461,5 +495,53 @@ func TestReadOptionalFileLimitsInput(t *testing.T) {
 	_, exists, err := readOptionalFile(path)
 	if !exists || err == nil {
 		t.Fatalf("expected oversized existing file to fail, exists=%v err=%v", exists, err)
+	}
+}
+
+func TestDevelopmentPrivateHomesRejectEscapeAndDivergence(t *testing.T) {
+	for _, home := range []string{`D:\Dev State`, `D:\Dev State\..\Production`, `C:\Users\Test\.codex`} {
+		if _, err := validatePrivateHome(`D:\Dev State`, home, "home"); err == nil {
+			t.Fatalf("expected private home %q to be rejected", home)
+		}
+	}
+	plan := validProductionLaunchPlan(minimumControlPort)
+	plan.InstallChannel = developmentChannel
+	plan.AppUserModelID = developmentAppUserModelID
+	plan.DisplayName = developmentProductName
+	plan.PrimaryCodexHome = `D:\Dev State\PrimaryHome`
+	plan.PrimarySQLiteHome = `D:\Dev State\DifferentDB`
+	if err := validateReleaseLaunchPlan(plan); err == nil {
+		t.Fatal("development SQLite home must not diverge from native Codex home")
+	}
+	plan.PrimarySQLiteHome = plan.PrimaryCodexHome
+	if err := validateReleaseLaunchPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDevelopmentBuildIdentityCannotBecomeProduction(t *testing.T) {
+	root := `D:\Dev State`
+	home := filepath.Join(root, developmentPrimaryHome)
+	manifest := map[string]any{
+		"schemaVersion": 2, "profilePath": filepath.Join(root, profileDirectoryName),
+		"controlPort": 61235, "installChannel": developmentChannel,
+		"primaryCodexHome": home, "primarySqliteHome": home,
+		"windowsIntegrationIsolation": map[string]string{
+			"appUserModelId": developmentAppUserModelID, "displayName": developmentProductName,
+		},
+	}
+	read := func(_ string) ([]byte, bool, error) {
+		data, err := json.Marshal(manifest)
+		return data, true, err
+	}
+	if err := validateBuildIdentity(`D:\Dev App`, root, 61235, developmentChannel, home, home, developmentAppUserModelID, developmentProductName, read); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBuildIdentity(`D:\Dev App`, root, 61235, productionChannel, "", "", productionAppUserModelID, productionProductName, read); err == nil {
+		t.Fatal("rewriting sidecar to production must not unbind a development build")
+	}
+	manifest["primarySqliteHome"] = `C:\Users\Test\.codex`
+	if err := validateBuildIdentity(`D:\Dev App`, root, 61235, developmentChannel, home, home, developmentAppUserModelID, developmentProductName, read); err == nil {
+		t.Fatal("manifest must not redirect development SQLite into production")
 	}
 }

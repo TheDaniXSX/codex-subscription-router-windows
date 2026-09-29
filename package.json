@@ -18,7 +18,7 @@
   "scripts": {
     "check": "npm run check:go && npm run check:js && npm run check:python && npm run test:release",
     "check:go": "go test ./... && go vet ./...",
-    "check:js": "node --check ui/account-menu.js && node --check ui/thread-subscription.js && node --check ui/ui-test-bridge.cjs && node --check chrome-extension/service-worker.js && node --check chrome-extension/popup.js",
+    "check:js": "node --check ui/account-menu.js && node --check ui/thread-subscription.js && node --check ui/turn-usage.js && node --check ui/ui-test-bridge.cjs && node --check chrome-extension/service-worker.js && node --check chrome-extension/popup.js",
     "test:js": "node --test ui/*.test.cjs",
     "check:python": "python3 -m py_compile scripts/patch_app.py scripts/check_release.py scripts/release/*.py",
     "check:python:windows": "python -m compileall -q scripts/release && python -m py_compile scripts/patch_app.py scripts/patch_windows_app.py scripts/check_release.py",

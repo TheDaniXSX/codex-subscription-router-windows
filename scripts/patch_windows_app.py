@@ -32,6 +32,11 @@ PROJECT_VERSION = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 MINIMUM_CONTROL_PORT = 49152
 MAXIMUM_CONTROL_PORT = 65535
 PRODUCT_NAME = "Codex Subscription Router"
+DEVELOPMENT_PRODUCT_NAME = f"{PRODUCT_NAME} [DEV]"
+PRODUCTION_CHANNEL = "production"
+DEVELOPMENT_CHANNEL = "development"
+PRODUCTION_APP_USER_MODEL_ID = "com.openai.codex.subscription-router"
+DEVELOPMENT_APP_USER_MODEL_ID = "com.openai.codex.subscription-router.dev"
 BUILD_MANIFEST_NAME = "codex-mux-build.json"
 DEFAULT_DESTINATION = (
     Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
@@ -228,7 +233,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="Appx package root, its app directory, or ChatGPT.exe (auto-detected if omitted).",
     )
-    parser.add_argument("--destination", type=Path, default=DEFAULT_DESTINATION)
+    parser.add_argument("--destination", type=Path)
+    parser.add_argument("--state-root", type=Path, help="Explicit private router state directory.")
+    parser.add_argument(
+        "--install-channel",
+        choices=(PRODUCTION_CHANNEL, DEVELOPMENT_CHANNEL),
+        default=PRODUCTION_CHANNEL,
+        help="Immutable installation flavor; development gets private Codex homes and desktop identity.",
+    )
     parser.add_argument(
         "--mux",
         type=Path,
@@ -262,7 +274,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Allow an unknown version/hash; all structural and semantic anchors remain mandatory.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.destination is None:
+        args.destination = (
+            development_root() / "app"
+            if args.install_channel == DEVELOPMENT_CHANNEL
+            else DEFAULT_DESTINATION
+        )
+    return args
 
 
 def resolve_control_port(value: int | None) -> int:
@@ -828,8 +847,44 @@ def validate_approved_source(source: SourceInfo, allow_untested: bool) -> None:
         )
 
 
-def resolve_state_root() -> Path:
-    configured = (
+def development_root() -> Path:
+    return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "CSR-Dev"
+
+
+def validate_install_channel_paths(destination: Path, state_root: Path, install_channel: str) -> None:
+    # Reserve a short, dedicated development tree even for direct patcher calls.
+    # Resolving the candidate also prevents a junction inside CSR-Dev from
+    # redirecting an otherwise plausible lexical path into production.
+    reserved = Path(os.path.normcase(os.path.abspath(str(development_root()))))
+    for value in (destination, state_root):
+        candidate = _canonical(value)
+        inside = _is_relative_to(candidate, reserved)
+        if install_channel == DEVELOPMENT_CHANNEL and (not inside or candidate == reserved):
+            raise RuntimeError("development destination and state root must be strict children of LOCALAPPDATA\\CSR-Dev")
+        if install_channel == PRODUCTION_CHANNEL and (inside or _is_relative_to(reserved, candidate)):
+            raise RuntimeError("production paths must not overlap the reserved LOCALAPPDATA\\CSR-Dev tree")
+    target, state = _canonical(destination), _canonical(state_root)
+    if _is_relative_to(target, state) or _is_relative_to(state, target):
+        raise RuntimeError("destination and state root must be separate non-overlapping trees")
+    if destination.exists():
+        manifest_path = destination / BUILD_MANIFEST_NAME
+        sidecar_path = destination / "resources" / "codex-router" / "launcher-config.json"
+        if install_channel == DEVELOPMENT_CHANNEL and (not manifest_path.is_file() or not sidecar_path.is_file()):
+            raise RuntimeError("existing development installation is missing channel-bound manifests")
+        for path in (manifest_path, sidecar_path):
+            if not path.is_file():
+                continue
+            metadata = json.loads(path.read_text(encoding="utf-8"))
+            existing_channel = metadata.get("installChannel") or PRODUCTION_CHANNEL
+            if existing_channel != install_channel:
+                raise RuntimeError("refusing to change an existing installation channel in place")
+            recorded_root = metadata.get("stateRoot") if path == sidecar_path else None
+            if recorded_root and _canonical(Path(recorded_root)) != state:
+                raise RuntimeError("existing installation is bound to a different state root")
+
+
+def resolve_state_root(install_channel: str = PRODUCTION_CHANNEL, explicit: Path | None = None) -> Path:
+    configured = explicit or (development_root() / "data" if install_channel == DEVELOPMENT_CHANNEL else None) or (
         os.environ.get("CODEX_ROUTER_DATA_DIR")
         or os.environ.get("CODEX_MUX_HOME")
         or os.environ.get("CODEX_MUX_STATE_ROOT")
@@ -948,7 +1003,15 @@ def replace_identifiers(source: str, mapping: dict[str, str]) -> str:
     return source
 
 
-def patch_windows_bootstrap(extracted: Path) -> None:
+def patch_windows_bootstrap(extracted: Path, install_channel: str = PRODUCTION_CHANNEL) -> None:
+    if install_channel not in (PRODUCTION_CHANNEL, DEVELOPMENT_CHANNEL):
+        raise RuntimeError(f"unsupported installation channel: {install_channel}")
+    display_name = DEVELOPMENT_PRODUCT_NAME if install_channel == DEVELOPMENT_CHANNEL else PRODUCT_NAME
+    app_user_model_id = (
+        DEVELOPMENT_APP_USER_MODEL_ID
+        if install_channel == DEVELOPMENT_CHANNEL
+        else PRODUCTION_APP_USER_MODEL_ID
+    )
     bootstrap_files = list((extracted / ".vite" / "build").glob("bootstrap-*.js"))
     if len(bootstrap_files) != 1:
         raise RuntimeError(f"expected one desktop bootstrap bundle, found {len(bootstrap_files)}")
@@ -1006,8 +1069,20 @@ def patch_windows_bootstrap(extracted: Path) -> None:
         r"(?P<electron>[A-Za-z_$][\w$]*)\.app\.setName\([^;]+?\),"
         r"(?=(?P=electron)\.app\.setPath\(`userData`)"
     )
+    def app_name_replacement(match: re.Match[str]) -> str:
+        electron = match.group("electron")
+        development_title = ""
+        if install_channel == DEVELOPMENT_CHANNEL:
+            development_title = (
+                f"{electron}.app.on(`browser-window-created`,(_event,window)=>{{"
+                "const mark=title=>String(title??``).endsWith(` [DEV]`)?String(title):`${title??``} [DEV]`;"
+                "window.on(`page-title-updated`,(event,title)=>{event.preventDefault();window.setTitle(mark(title))});"
+                "window.setTitle(mark(window.getTitle()))}),"
+            )
+        return development_title + f"{electron}.app.setName(`{display_name}`),"
+
     text, count = app_name_pattern.subn(
-        lambda match: f"{match.group('electron')}.app.setName(`{PRODUCT_NAME}`),",
+        app_name_replacement,
         text,
         count=1,
     )
@@ -1022,19 +1097,19 @@ def patch_windows_bootstrap(extracted: Path) -> None:
         text = replace_unique(
             text,
             "l.app.setAppUserModelId(Qe(ek))",
-            "l.app.setAppUserModelId(`com.openai.codex.subscription-router`)",
+            f"l.app.setAppUserModelId(`{app_user_model_id}`)",
             "26.924 AppUserModelID",
         )
         count = 1
     elif _is_26915(extracted) or _is_26917(extracted):
         app_id = "o.app.setAppUserModelId(Ht(kj))" if _is_26917(extracted) else "o.app.setAppUserModelId(Ut(_j))"
-        text = replace_unique(text, app_id, "o.app.setAppUserModelId(`com.openai.codex.subscription-router`)", "AppUserModelID")
+        text = replace_unique(text, app_id, f"o.app.setAppUserModelId(`{app_user_model_id}`)", "AppUserModelID")
         count = 1
     else:
         text, count = app_id_pattern.subn(
             lambda match: (
                 f"process.platform===`win32`&&{match.group('electron')}.app."
-                "setAppUserModelId(`com.openai.codex.subscription-router`)"
+                f"setAppUserModelId(`{app_user_model_id}`)"
             ),
             text,
             count=1,
@@ -1767,9 +1842,14 @@ def patch_windows_renderer(extracted: Path, token: str, control_port: int) -> No
     thread_path.write_text(thread, encoding="utf-8")
 
 
-def patch_extracted_asar(extracted: Path, token: str, control_port: int) -> None:
+def patch_extracted_asar(
+    extracted: Path,
+    token: str,
+    control_port: int,
+    install_channel: str = PRODUCTION_CHANNEL,
+) -> None:
     verify_windows_integration_isolation(extracted)
-    patch_windows_bootstrap(extracted)
+    patch_windows_bootstrap(extracted, install_channel)
     patch_windows_runtime_paths(extracted)
     patch_windows_native_messaging_isolation(extracted)
     patch_windows_appshots_gate(extracted)
@@ -1951,20 +2031,51 @@ def write_build_manifest(
     preservation: dict[str, object],
     backup_path: Path | None = None,
     control_port: int | None = None,
+    install_channel: str = PRODUCTION_CHANNEL,
 ) -> dict[str, object]:
+    if install_channel not in (PRODUCTION_CHANNEL, DEVELOPMENT_CHANNEL):
+        raise RuntimeError(f"unsupported installation channel: {install_channel}")
     selected_control_port = resolve_control_port(control_port)
+    distribution_notices = staged_app / "resources" / "codex-router"
+    distribution_notices.mkdir(parents=True, exist_ok=True)
+    for source_notice, destination_name in (
+        (PROJECT_ROOT / "NOTICE.md", "NOTICE.md"),
+        (PROJECT_ROOT / "assets" / "LOBE-ICONS-LICENSE.txt", "LOBE-ICONS-LICENSE.txt"),
+        (PROJECT_ROOT / "assets" / "SQLITE-LICENSE.txt", "SQLITE-LICENSE.txt"),
+    ):
+        if not source_notice.is_file():
+            raise RuntimeError(f"required distribution notice is missing: {source_notice}")
+        shutil.copy2(source_notice, distribution_notices / destination_name)
+
+    primary_codex_home = state_root / "PrimaryHome" if install_channel == DEVELOPMENT_CHANNEL else None
+    primary_sqlite_home = state_root / "PrimaryHome" if install_channel == DEVELOPMENT_CHANNEL else None
+    app_user_model_id = (
+        DEVELOPMENT_APP_USER_MODEL_ID
+        if install_channel == DEVELOPMENT_CHANNEL
+        else PRODUCTION_APP_USER_MODEL_ID
+    )
+    display_name = DEVELOPMENT_PRODUCT_NAME if install_channel == DEVELOPMENT_CHANNEL else PRODUCT_NAME
     launcher_config = staged_app / "resources" / "codex-router" / "launcher-config.json"
     launcher_config.parent.mkdir(parents=True, exist_ok=True)
     launcher_config_temporary = launcher_config.with_name(
         f".{launcher_config.name}.{uuid.uuid4().hex}.tmp"
     )
+    launcher_configuration: dict[str, object] = {
+        "schemaVersion": 2,
+        "stateRoot": str(state_root),
+        "controlPort": selected_control_port,
+    }
+    if install_channel == DEVELOPMENT_CHANNEL:
+        launcher_configuration.update(
+            {
+                "installChannel": DEVELOPMENT_CHANNEL,
+                "primaryCodexHome": str(primary_codex_home),
+                "primarySqliteHome": str(primary_sqlite_home),
+            }
+        )
     launcher_config_temporary.write_text(
         json.dumps(
-            {
-                "schemaVersion": 2,
-                "stateRoot": str(state_root),
-                "controlPort": selected_control_port,
-            },
+            launcher_configuration,
             indent=2,
             sort_keys=True,
         )
@@ -1999,6 +2110,9 @@ def write_build_manifest(
         "logsPath": str(state_root / "logs"),
         "launcherConfigPath": "resources/codex-router/launcher-config.json",
         "controlPort": selected_control_port,
+        "installChannel": install_channel,
+        "primaryCodexHome": str(primary_codex_home) if primary_codex_home is not None else None,
+        "primarySqliteHome": str(primary_sqlite_home) if primary_sqlite_home is not None else None,
         # This path is planned before the directory publication.  Therefore
         # the manifest and app payload cross the destination rename boundary
         # together; there is no post-publish window with stale rollback data.
@@ -2017,8 +2131,8 @@ def write_build_manifest(
             ),
         },
         "windowsIntegrationIsolation": {
-            "appUserModelId": "com.openai.codex.subscription-router",
-            "displayName": PRODUCT_NAME,
+            "appUserModelId": app_user_model_id,
+            "displayName": display_name,
             "appxManifestCopied": False,
             "officialProtocolRegistrationDisabled": True,
             "officialExplorerVerbRegistrationCopied": False,
@@ -2104,12 +2218,19 @@ def patch_app(
     dry_run: bool,
     allow_untested_source: bool,
     control_port: int | None = None,
+    install_channel: str = PRODUCTION_CHANNEL,
+    state_root_path: Path | None = None,
 ) -> dict[str, object]:
+    if install_channel not in (PRODUCTION_CHANNEL, DEVELOPMENT_CHANNEL):
+        raise RuntimeError(f"unsupported installation channel: {install_channel}")
     selected_control_port = resolve_control_port(control_port)
     source_path = source_path or discover_appx_source()
     source = inspect_source(source_path)
     destination = destination.expanduser().resolve(strict=False)
+    state_root = resolve_state_root(install_channel, state_root_path)
     validate_source_destination(source.app_root, destination)
+    validate_source_destination(source.app_root, state_root)
+    validate_install_channel_paths(destination, state_root, install_channel)
     validate_approved_source(source, allow_untested_source)
     if destination.exists() and not force:
         raise RuntimeError(f"destination exists: {destination} (pass --force for a recoverable backup)")
@@ -2119,7 +2240,6 @@ def patch_app(
         f"app.asar {source.asar_sha256}"
     )
     asar = ensure_asar_tool()
-    state_root = resolve_state_root()
     token, token_is_new = prepare_control_token(state_root)
     destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -2158,7 +2278,7 @@ def patch_app(
         patch_owl_config(staged_app)
         run([str(asar), "extract", str(staged_app / "resources" / "app.asar"), str(extracted)])
         print("Validating and patching ASAR anchors…")
-        patch_extracted_asar(extracted, token, selected_control_port)
+        patch_extracted_asar(extracted, token, selected_control_port, install_channel)
         official_unpacked_files = tuple(
             tree_file_hashes(staged_app / "resources" / "app.asar.unpacked").keys()
         )
@@ -2193,6 +2313,7 @@ def patch_app(
             preservation,
             planned_backup,
             selected_control_port,
+            install_channel,
         )
 
         if dry_run:
@@ -2237,6 +2358,8 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             allow_untested_source=args.allow_untested_source,
             control_port=args.control_port,
+            install_channel=args.install_channel,
+            state_root_path=args.state_root,
         )
     except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"patch failed: {error}", file=sys.stderr)

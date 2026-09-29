@@ -18,6 +18,7 @@ import (
 	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/protocol"
 	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/spend"
 	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/state"
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/usage"
 )
 
 const requestTimeout = 30 * time.Second
@@ -142,6 +143,10 @@ type Multiplexer struct {
 	threadSpendMu      sync.Mutex
 	threadSpending     map[string]state.ThreadSpend
 	threadSpendUnsaved map[string]bool
+	usageLedger        *usage.Manager
+	usageTelemetry     *usageTracking
+	usageMutationMu    sync.Mutex
+	usageRelations     *usageRelationsState
 }
 
 type threadLock struct {
@@ -157,7 +162,7 @@ func New(options Options) (*Multiplexer, error) {
 	if timeout <= 0 {
 		timeout = requestTimeout
 	}
-	return &Multiplexer{
+	m := &Multiplexer{
 		realExecutable:       options.RealExecutable,
 		realArgs:             append([]string(nil), options.RealArgs...),
 		environment:          append([]string(nil), options.Environment...),
@@ -179,7 +184,9 @@ func New(options Options) (*Multiplexer, error) {
 		resetPreviews:        make(map[string]ResetCreditsPreview),
 		requestSpending:      options.RequestSpending,
 		spendPolicy:          spend.New(5 * time.Second),
-	}, nil
+	}
+	m.initUsage()
+	return m, nil
 }
 
 func (m *Multiplexer) Start(ctx context.Context) error {
@@ -264,6 +271,12 @@ func (m *Multiplexer) Close() {
 		m.children = make(map[string]*backend.Child)
 		m.childrenMu.Unlock()
 		m.closeChildrenBounded(entries)
+		if m.usageTelemetry != nil {
+			m.usageTelemetry.wg.Wait()
+		}
+		if m.usageLedger != nil {
+			_ = m.usageLedger.Close()
+		}
 	})
 }
 
@@ -626,6 +639,7 @@ func (m *Multiplexer) inboundLoop(ctx context.Context) {
 
 func (m *Multiplexer) handleInbound(inbound backend.Inbound) {
 	message := inbound.Message
+	m.trackUsageNotification(inbound)
 	if message.Method == "" && len(message.ID) > 0 {
 		key := protocol.RequestIDKey(message.ID)
 		m.externalMu.Lock()
@@ -649,6 +663,7 @@ func (m *Multiplexer) handleInbound(inbound backend.Inbound) {
 				}
 			}
 			m.learnThreadOwner(route, inbound.AccountID, message.Result)
+			m.trackUsageClientResponse(route.message, message)
 			if route.method == "thread/start" && message.Error == nil {
 				label := inbound.AccountID
 				if account, exists := m.store.Account(inbound.AccountID); exists {

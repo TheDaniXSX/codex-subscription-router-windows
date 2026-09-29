@@ -26,6 +26,10 @@ Installation directory for the independent router application.
 .PARAMETER StateRoot
 Directory for router state, account homes, logs, and control token.
 
+.PARAMETER InstallChannel
+Immutable installation flavor. Production is the compatibility-preserving default;
+Development uses a private primary CODEX_HOME and a separate desktop identity.
+
 .PARAMETER MuxPath
 Optional prebuilt codex-mux.exe. When omitted, the patcher builds it from this
 checkout using the installed Go toolchain.
@@ -80,6 +84,9 @@ pwsh -File .\scripts\install_windows.ps1 -Force -NoLaunch
 
 [CmdletBinding()]
 param(
+    [ValidateSet('Production', 'Development')]
+    [string]$InstallChannel = 'Production',
+
     [Alias('SourceApp')]
     [string]$Source,
 
@@ -126,9 +133,27 @@ $script:InstallStartedAt = [DateTime]::UtcNow
 $script:InstallMutex = $null
 $script:InstallMutexAcquired = $false
 $script:ControlPortReservation = $null
+$script:InstallChannelValue = $InstallChannel.ToLowerInvariant()
+$script:RouterAppUserModelId = if ($InstallChannel -eq 'Development') {
+    'com.openai.codex.subscription-router.dev'
+}
+else {
+    'com.openai.codex.subscription-router'
+}
+$script:RouterDisplayName = if ($InstallChannel -eq 'Development') {
+    'Codex Subscription Router [DEV]'
+}
+else {
+    'Codex Subscription Router'
+}
+$script:StartMenuShortcutName = if ($InstallChannel -eq 'Development') {
+    'Codex Subscription Router [DEV].lnk'
+}
+else {
+    'Codex Subscription Router.lnk'
+}
 Import-Module (Join-Path $PSScriptRoot 'WindowsLifecycle.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'ShortcutIdentity.psm1') -Force
-$script:RouterAppUserModelId = 'com.openai.codex.subscription-router'
 
 function Write-Step {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -441,7 +466,8 @@ function Invoke-LauncherSelfTest {
     param(
         [Parameter(Mandatory = $true)][string]$LauncherPath,
         [Parameter(Mandatory = $true)][string]$ExpectedStateRoot,
-        [Parameter(Mandatory = $true)][int]$ExpectedControlPort
+        [Parameter(Mandatory = $true)][int]$ExpectedControlPort,
+        [Parameter(Mandatory = $true)][ValidateSet('production', 'development')][string]$ExpectedInstallChannel
     )
 
     $variableNames = @('CODEX_ROUTER_DATA_DIR', 'CODEX_MUX_HOME', 'CODEX_MUX_STATE_ROOT')
@@ -485,6 +511,17 @@ function Invoke-LauncherSelfTest {
     }
     if ([int]$values['launcher_config_schema'] -ne 2 -or [int]$values['control_port'] -ne $ExpectedControlPort) {
         throw "Launcher self-test selected an inconsistent schema/control port: schema=$($values['launcher_config_schema']), port=$($values['control_port'])"
+    }
+    if ($values['install_channel'] -cne $ExpectedInstallChannel) {
+        throw "Launcher self-test selected channel '$($values['install_channel'])'; expected '$ExpectedInstallChannel'."
+    }
+    if ($ExpectedInstallChannel -eq 'development') {
+        $expectedPrimaryCodexHome = Resolve-FullPath -Path (Join-Path $ExpectedStateRoot 'PrimaryHome')
+        $expectedPrimarySQLiteHome = $expectedPrimaryCodexHome
+        if (-not (Resolve-FullPath -Path $values['primary_codex_home']).Equals($expectedPrimaryCodexHome, [StringComparison]::OrdinalIgnoreCase) -or
+            -not (Resolve-FullPath -Path $values['primary_sqlite_home']).Equals($expectedPrimarySQLiteHome, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Launcher self-test did not resolve the dedicated development Codex and SQLite homes.'
+        }
     }
 }
 
@@ -735,14 +772,15 @@ function Install-StartMenuShortcut {
     param(
         [Parameter(Mandatory = $true)][string]$LauncherPath,
         [Parameter(Mandatory = $true)][string]$InstallDestination,
-        [Parameter(Mandatory = $true)][string]$RouterStateRoot
+        [Parameter(Mandatory = $true)][string]$RouterStateRoot,
+        [Parameter(Mandatory = $true)][string]$ShortcutName
     )
 
     if ([string]::IsNullOrWhiteSpace($env:APPDATA)) {
         throw 'APPDATA is unavailable; the per-user Start Menu path cannot be resolved.'
     }
     $shortcutDirectory = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
-    $shortcutPath = Join-Path $shortcutDirectory 'Codex Subscription Router.lnk'
+    $shortcutPath = Join-Path $shortcutDirectory $ShortcutName
     $temporaryShortcut = Join-Path $shortcutDirectory ('.codex-subscription-router-{0}.lnk' -f [Guid]::NewGuid().ToString('N'))
     $localBackup = Join-Path $shortcutDirectory ('.codex-subscription-router-backup-{0}.lnk' -f [Guid]::NewGuid().ToString('N'))
     $shortcutBackup = $null
@@ -753,7 +791,7 @@ function Install-StartMenuShortcut {
         $shortcut = $shell.CreateShortcut($temporaryShortcut)
         $shortcut.TargetPath = $LauncherPath
         $shortcut.WorkingDirectory = $InstallDestination
-        $shortcut.Description = 'Codex Subscription Router (unofficial multi-subscription client)'
+        $shortcut.Description = "$($script:RouterDisplayName) (unofficial multi-subscription client)"
         $shortcut.IconLocation = "$LauncherPath,0"
         $shortcut.Save()
         [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) | Out-Null
@@ -941,9 +979,14 @@ function Test-InstalledLayout {
     catch {
         throw "Post-install verification failed; codex-mux-build.json is invalid: $($_.Exception.Message)"
     }
+    $metadataChannel = if ($null -ne $metadata.PSObject.Properties['installChannel'] -and
+        -not [string]::IsNullOrWhiteSpace([string]$metadata.installChannel)) {
+        ([string]$metadata.installChannel).ToLowerInvariant()
+    } else { 'production' }
     if ($null -eq $metadata.schemaVersion -or [int]$metadata.schemaVersion -ne 2 -or
         $null -eq $metadata.sourceAsarSha256 -or $null -eq $metadata.muxSha256 -or
-        $null -eq $metadata.controlPort -or [int]$metadata.controlPort -lt 49152 -or [int]$metadata.controlPort -gt 65535) {
+        $null -eq $metadata.controlPort -or [int]$metadata.controlPort -lt 49152 -or [int]$metadata.controlPort -gt 65535 -or
+        $metadataChannel -cne $script:InstallChannelValue) {
         throw 'Post-install verification failed; codex-mux-build.json lacks required provenance fields.'
     }
 
@@ -955,10 +998,16 @@ function Test-InstalledLayout {
         throw "Post-install verification failed; launcher-config.json is invalid: $($_.Exception.Message)"
     }
     $configProperties = @($launcherConfig.PSObject.Properties | ForEach-Object { $_.Name })
-    if ($configProperties.Count -ne 3 -or
+    $expectedConfigProperties = if ($script:InstallChannelValue -eq 'development') { 6 } else { 3 }
+    $sidecarChannel = if ($null -ne $launcherConfig.PSObject.Properties['installChannel'] -and
+        -not [string]::IsNullOrWhiteSpace([string]$launcherConfig.installChannel)) {
+        ([string]$launcherConfig.installChannel).ToLowerInvariant()
+    } else { 'production' }
+    if ($configProperties.Count -ne $expectedConfigProperties -or
         $configProperties -notcontains 'schemaVersion' -or
         $configProperties -notcontains 'stateRoot' -or
         $configProperties -notcontains 'controlPort' -or
+        $sidecarChannel -cne $metadataChannel -or
         [int]$launcherConfig.schemaVersion -ne 2 -or
         [int]$launcherConfig.controlPort -lt 49152 -or [int]$launcherConfig.controlPort -gt 65535 -or
         [string]::IsNullOrWhiteSpace($launcherConfig.stateRoot)) {
@@ -971,8 +1020,103 @@ function Test-InstalledLayout {
     if ([int]$launcherConfig.controlPort -ne [int]$metadata.controlPort) {
         throw 'Post-install verification failed; manifest and launcher sidecar controlPort values differ.'
     }
+    $integration = $metadata.windowsIntegrationIsolation
+    $expectedAppUserModelId = if ($script:InstallChannelValue -eq 'development') {
+        'com.openai.codex.subscription-router.dev'
+    } else { 'com.openai.codex.subscription-router' }
+    $expectedDisplayName = if ($script:InstallChannelValue -eq 'development') {
+        'Codex Subscription Router [DEV]'
+    } else { 'Codex Subscription Router' }
+    if ([string]$integration.appUserModelId -cne $expectedAppUserModelId -or
+        [string]$integration.displayName -cne $expectedDisplayName) {
+        throw 'Post-install verification failed; manifest desktop identity does not match the installation channel.'
+    }
+    if ($script:InstallChannelValue -eq 'development') {
+        $expectedCodexHome = Resolve-FullPath -Path (Join-Path $RouterStateRoot 'PrimaryHome')
+        $expectedSQLiteHome = $expectedCodexHome
+        foreach ($entry in @(
+            @{ Sidecar = [string]$launcherConfig.primaryCodexHome; Manifest = [string]$metadata.primaryCodexHome; Expected = $expectedCodexHome; Name = 'primaryCodexHome' },
+            @{ Sidecar = [string]$launcherConfig.primarySqliteHome; Manifest = [string]$metadata.primarySqliteHome; Expected = $expectedSQLiteHome; Name = 'primarySqliteHome' }
+        )) {
+            if (-not (Resolve-FullPath -Path $entry.Sidecar).Equals($entry.Expected, [StringComparison]::OrdinalIgnoreCase) -or
+                -not (Resolve-FullPath -Path $entry.Manifest).Equals($entry.Expected, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Post-install verification failed; sidecar and manifest do not bind the private development $($entry.Name)."
+            }
+        }
+    }
+    elseif ($null -ne $launcherConfig.PSObject.Properties['primaryCodexHome'] -or
+        $null -ne $launcherConfig.PSObject.Properties['primarySqliteHome']) {
+        throw 'Post-install verification failed; production sidecar must not redirect primary Codex homes.'
+    }
 
     return Resolve-FullPath -Path $launcher -MustExist
+}
+
+function Get-RecordedInstallChannel {
+    param([Parameter(Mandatory = $true)]$Value, [Parameter(Mandatory = $true)][string]$Description)
+    if ($null -eq $Value.PSObject.Properties['installChannel'] -or
+        [string]::IsNullOrWhiteSpace([string]$Value.installChannel)) {
+        return 'production'
+    }
+    $channel = ([string]$Value.installChannel).ToLowerInvariant()
+    if ($channel -notin @('production', 'development')) {
+        throw "$Description declares an unsupported installChannel '$($Value.installChannel)'."
+    }
+    return $channel
+}
+
+function Assert-ExistingInstallationBinding {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallDestination,
+        [Parameter(Mandatory = $true)][string]$RouterStateRoot,
+        [Parameter(Mandatory = $true)][string]$ExpectedChannel
+    )
+    $manifestPath = Join-Path $InstallDestination 'codex-mux-build.json'
+    $sidecarPath = Join-Path $InstallDestination 'resources\codex-router\launcher-config.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $sidecarPath -PathType Leaf)) {
+        throw 'An existing destination without both channel-bound manifests cannot be replaced safely.'
+    }
+    try {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $sidecar = Get-Content -LiteralPath $sidecarPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        throw "Existing installation channel metadata is invalid: $($_.Exception.Message)"
+    }
+    $manifestChannel = Get-RecordedInstallChannel -Value $manifest -Description 'Build manifest'
+    $sidecarChannel = Get-RecordedInstallChannel -Value $sidecar -Description 'Launcher sidecar'
+    if ($manifestChannel -cne $sidecarChannel) {
+        throw "Existing installation channel mismatch: manifest=$manifestChannel, sidecar=$sidecarChannel."
+    }
+    if ($manifestChannel -cne $ExpectedChannel) {
+        throw "Refusing to change an existing $manifestChannel installation into $ExpectedChannel in place. Use a separate Destination and StateRoot."
+    }
+    $recordedRoot = Resolve-FullPath -Path ([string]$sidecar.stateRoot)
+    if (-not $recordedRoot.Equals((Resolve-FullPath -Path $RouterStateRoot), [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Existing installation is bound to StateRoot '$recordedRoot'; refusing to replace it using another root."
+    }
+}
+
+function Assert-InstallChannelPaths {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallDestination,
+        [Parameter(Mandatory = $true)][string]$RouterStateRoot,
+        [Parameter(Mandatory = $true)][string]$LocalAppDataRoot,
+        [Parameter(Mandatory = $true)][string]$Channel
+    )
+    $developmentRoot = Resolve-FullPath -Path (Join-Path $LocalAppDataRoot 'CSR-Dev')
+    foreach ($path in @($InstallDestination, $RouterStateRoot)) {
+        $insideDevelopment = Test-PathIsWithin -Candidate $path -Parent $developmentRoot
+        if ($Channel -eq 'development' -and
+            (-not $insideDevelopment -or (Resolve-FullPath -Path $path) -eq $developmentRoot)) {
+            throw 'Development Destination and StateRoot must be separate strict children of LOCALAPPDATA\CSR-Dev.'
+        }
+        if ($Channel -eq 'production' -and
+            ($insideDevelopment -or (Test-PathIsWithin -Candidate $developmentRoot -Parent $path))) {
+            throw 'Production paths must not overlap the reserved LOCALAPPDATA\CSR-Dev tree.'
+        }
+    }
 }
 
 try {
@@ -983,6 +1127,15 @@ try {
         throw 'LOCALAPPDATA is unavailable; a per-user installation path cannot be determined.'
     }
 
+    if ($InstallChannel -eq 'Development') {
+        if (-not $PSBoundParameters.ContainsKey('Destination')) {
+            $Destination = Join-Path $env:LOCALAPPDATA 'CSR-Dev\app'
+        }
+        if (-not $PSBoundParameters.ContainsKey('StateRoot')) {
+            $StateRoot = Join-Path $env:LOCALAPPDATA 'CSR-Dev\data'
+        }
+        Write-Info 'Development channel uses private primary Codex/SQLite homes under its StateRoot and a separate [DEV] desktop identity.'
+    }
     $Destination = Resolve-FullPath -Path $Destination
     $StateRoot = Resolve-FullPath -Path $StateRoot
     if (-not [string]::IsNullOrWhiteSpace($MuxPath)) {
@@ -1008,6 +1161,7 @@ try {
     $localAppDataRoot = Resolve-FullPath -Path $env:LOCALAPPDATA -MustExist
     Assert-SeparateTrees -ReadOnlySource $Source -InstallDestination $Destination -RouterStateRoot $StateRoot
     Assert-SafeWritablePaths -InstallDestination $Destination -RouterStateRoot $StateRoot -LocalAppDataRoot $localAppDataRoot
+    Assert-InstallChannelPaths -InstallDestination $Destination -RouterStateRoot $StateRoot -LocalAppDataRoot $localAppDataRoot -Channel $script:InstallChannelValue
     if (-not [string]::IsNullOrWhiteSpace($MuxPath) -and
         ((Test-PathIsWithin -Candidate $MuxPath -Parent $Source) -or
          (Test-PathIsWithin -Candidate $MuxPath -Parent $Destination))) {
@@ -1032,6 +1186,10 @@ try {
     }
     if (-not $script:InstallMutexAcquired) {
         throw 'Another Codex Subscription Router installation is already running for this user.'
+    }
+
+    if (Test-Path -LiteralPath $Destination) {
+        Assert-ExistingInstallationBinding -InstallDestination $Destination -RouterStateRoot $StateRoot -ExpectedChannel $script:InstallChannelValue
     }
 
     if (-not $script:EffectiveDryRun) {
@@ -1179,6 +1337,8 @@ try {
         '-X', 'utf8',
         '-u',
         $script:PatcherPath,
+        '--install-channel', $script:InstallChannelValue,
+        '--state-root', $StateRoot,
         '--source', $Source,
         '--destination', $Destination,
         '--control-port', [string]$ControlPort
@@ -1277,7 +1437,7 @@ try {
             Write-Step 'Verifying installed layout and provenance metadata'
             $launcherPath = Test-InstalledLayout -InstallDestination $Destination -RouterStateRoot $StateRoot
             Write-Info "Launcher: $launcherPath"
-            Invoke-LauncherSelfTest -LauncherPath $launcherPath -ExpectedStateRoot $StateRoot -ExpectedControlPort $ControlPort
+            Invoke-LauncherSelfTest -LauncherPath $launcherPath -ExpectedStateRoot $StateRoot -ExpectedControlPort $ControlPort -ExpectedInstallChannel $script:InstallChannelValue
 
             Write-Step 'Hardening private router payload and state ACLs'
             [void](Set-CsrPrivateDirectoryAcl -Path $Destination)
@@ -1321,7 +1481,7 @@ try {
         }
         else {
             try {
-                $shortcutRecord = Install-StartMenuShortcut -LauncherPath $launcherPath -InstallDestination $Destination -RouterStateRoot $StateRoot
+                $shortcutRecord = Install-StartMenuShortcut -LauncherPath $launcherPath -InstallDestination $Destination -RouterStateRoot $StateRoot -ShortcutName $script:StartMenuShortcutName
             }
             catch {
                 Write-Warning "The app is verified, but the optional Start Menu shortcut could not be installed: $($_.Exception.Message)"

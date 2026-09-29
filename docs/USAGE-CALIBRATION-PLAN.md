@@ -1,6 +1,6 @@
 # Consumo por petición y calibración de cuota: plan de implementación
 
-Estado: **especificación para desarrollo; funcionalidad e instalación DEV pendientes**.
+Estado: **implementación DEV autorizada y en curso**.
 Decisiones de producto confirmadas el 2026-09-28. Rama: `codex/usage-calibration`.
 Baseline revisado y actualizado desde GitHub: `c4eb2eae4fc5c59987a901d373f7b58f5015c3a9`.
 
@@ -32,7 +32,11 @@ Las horas de ejecución y de lectura de cuota son campos distintos. Se almacenan
 en UTC y se muestran en la zona del usuario. Una duración no usa el reloj de pared
 cuando hay un reloj monotónico disponible.
 
-## 2. Baseline y límites verificados
+## 2. Baseline y límites verificados al elaborar el plan
+
+Esta sección describe el punto de partida anterior a la implementación. El
+estado de la entrega DEV y las diferencias respecto al diseño están en la
+sección 13 y en `USAGE-CALIBRATION-DEV.md`.
 
 - Paquete instalado: `OpenAI.Codex 26.924.2738.0`; ASAR `26.924.22138`, build `11645`.
 - El manifest instalado coincide con esos valores; los procesos observados usan
@@ -209,11 +213,18 @@ históricas de un mismo régimen; solo impide restar porcentajes de épocas dist
 ## 6. Varias cuentas y cobertura
 
 USD se suma por operaciones únicas de todo el árbol. Tokens se conservan por
-modelo/categoría además del total. Porcentajes nativos de cuentas con capacidades
-distintas no se suman como si fueran una sola cuota: el footer muestra segmentos
-por cuenta/ventana; si son varias, un resumen `N cuentas` abre su desglose.
-El detalle puede ofrecer `pp equivalentes Plus` usando multiplicadores versionados,
-siempre como normalización calculada; no se etiqueta como porcentaje observado.
+modelo/categoría además del total. Decisión final del usuario: **todos los
+porcentajes mostrados y los objetivos del calibrador usan cuota equivalente
+Pro ×20**, también al consumir una cuenta ×1 o ×5.
+
+`pp_Pro20 = pp_originales × capacidad_cuenta / 20`
+
+Plus ×1 divide entre 20; Pro ×5 divide entre 4; Pro ×20 conserva el valor.
+Las lecturas originales, capacidad aplicada y versión de la conversión se
+conservan en el detalle. La etiqueta es `Observado · ×20`, con su normalización
+explicada. Solo se suman contribuciones únicas normalizadas del mismo bucket;
+5 h y semana permanecen separados. Una cuenta de capacidad desconocida produce
+un resultado parcial, nunca una capacidad inventada. API USD no cambia.
 
 Un marcador `*` expresa solapamiento conocido. La UI explica que su ausencia no
 demuestra ausencia de gasto en otro PC, cloud, ChatGPT Work u otro proceso. Durante
@@ -236,9 +247,12 @@ oficial). Capacidad inicial Plus=1, Pro5=5, Pro20=20: el porcentaje esperado par
 igual trabajo se **divide** entre la capacidad, no se multiplica. Las desviaciones
 de Fast, categorías, modelos y plan podrán aprenderse, sin imponerlas como verdad.
 
-Forma inicial conceptual para cuenta a y bucket b:
+Forma inicial conceptual para bucket b en la unidad visible Pro ×20:
 
-`E[pp] = escala_b × sum(tokens_categoria × peso_modelo_categoria × factor_tier) / capacidad_plan`
+`E[pp_Pro20] = escala_b × sum(tokens_categoria × peso_modelo_categoria × factor_tier)`
+
+La escala se ajusta exclusivamente a deltas observados normalizados a ×20. La
+capacidad solo convierte la lectura nativa; no se divide otra vez al predecir.
 
 Las tarifas dan proporciones, pero **no dan la escala absoluta tokens → pp**.
 Sin ninguna observación utilizable, mostrar unidades relativas de consumo y
@@ -332,12 +346,12 @@ worktree o un workspace de fixtures, no el proyecto abierto por PROD.
 | --- | --- | --- |
 | App | instalación actual `Programs/Codex Subscription Router` | `%LOCALAPPDATA%/CSR-Dev/app` |
 | Estado | `Programs/Codex Subscription Router Data` | `%LOCALAPPDATA%/CSR-Dev/data` |
-| CODEX_HOME | home actual | `%LOCALAPPDATA%/CSR-Dev/data/codex-home` |
-| CODEX_SQLITE_HOME | valor actual | subdirectorio DEV explícito, jamás heredado de PROD |
+| CODEX_HOME | home actual | `%LOCALAPPDATA%/CSR-Dev/data/PrimaryHome` |
+| CODEX_SQLITE_HOME | valor actual | el mismo `PrimaryHome` privado de DEV |
 | Perfil/caché/logs | actuales | todos bajo DEV data |
 | Control e inferencia | puertos/tokens actuales | puertos loopback propios, token nuevo |
 | Identidad de app | identidad actual | `com.openai.codex.subscription-router.dev`, icono y título DEV |
-| Acceso directo | actual | `Codex Router DEV`, creado de forma independiente |
+| Acceso directo | actual | `Codex Subscription Router [DEV]`, creado de forma independiente |
 | Cuentas | actuales | login propio en DEV; configuración nueva y editable |
 | Actualización/rollback | ciclo actual | scripts explícitamente limitados a DEV |
 
@@ -387,8 +401,9 @@ Matriz mínima de aceptación:
 2. A y B simultáneas, luego C antes del snapshot final: un grupo A+B+C y un delta;
    una raíz sin marcar bloquea entrenamiento; marcar conjunto permite entrenar;
    desmarcar elimina su influencia. Intervalos contiguos no duplican consumo.
-3. Solapamiento en otra cuenta no contamina; multi-cuenta muestra porcentajes
-   por cuenta, multi-bucket no suma 5 h + semana. Consumo desconocido señalado.
+3. Solapamiento en otra cuenta no contamina; ×1/×5/×20 con el mismo trabajo
+   producen el mismo consumo equivalente ×20; multi-bucket no suma 5 h + semana.
+   Lecturas nativas preservadas y consumo desconocido señalado.
 4. Falta usage/tarifa/cache/tier; failed/incomplete con usage; voz setup sin consumo;
    compactación, cancelación, error de metadata; nunca convertir desconocido en cero.
 5. SSE fragmentado, multiline, CRLF, duplicado, truncado y evento grande; passthrough
@@ -448,6 +463,46 @@ la documentación pública no demuestra qué devuelve cada endpoint de suscripci
 El tiempo de actualización de cuota y su resolución requieren observación real.
 Estos son criterios de aceptación técnica, no suposiciones de funcionamiento.
 
-En esta revisión se preparó la rama y la especificación. La implementación, la
-instalación DEV, las pruebas de convivencia y el piloto de calibración no se han
-ejecutado todavía.
+## 13. Implementación de la primera entrega DEV
+
+La rama incorpora captura de Responses SSE/JSON y compactación, ledger SQLite
+privado, relaciones de turnos/agentes persistentes, ventanas independientes,
+normalización ×20, observaciones agrupadas, selección manual y estimador. El
+driver fijado es `modernc.org/sqlite v1.38.2`, sin DLL SQLite ni CGO en el binario.
+Los resultados de inferencia y sus predicciones/tarifas se congelan al terminar.
+Una observación sin señal de cuota conserva el baseline y suma el trabajo
+posterior antes de entrenar; al cambiar los participantes se retira su selección.
+Los intervalos pendientes sobreviven al reinicio. Cambios de plan/reset los
+cierran como inválidos, sin borrar las muestras históricas.
+
+La correlación acepta respuestas nativas exactas a `turn/start` y relaciones
+cualificadas de agentes. Un indicador `subagent=false` no acredita una raíz.
+Los contratos sintéticos cubren repetición, orden alterado y reutilización de
+un hilo de agente para un nuevo turno directo del usuario. La cobertura real de
+las distintas fuentes todavía requiere el piloto dentro de DEV.
+
+La API inicial agrupa las operaciones de la sección 9 en tres rutas:
+
+- `GET /v1/usage/turn?threadId=...&turnId=...`: detalle de una raíz.
+- `GET /v1/usage/status`: estado del ledger y modelos de ambas ventanas.
+- `PATCH /v1/usage/calibration`: `rootId`, `included`, `revision` y
+  `includeRelated` opcional para seleccionar un grupo conocido completo.
+
+No se ha añadido todavía listado global paginado, exportación/borrado desde la
+UI, gráficos ni alertas de deriva. El detalle de un turno se devuelve completo;
+el ensayo de carga de 5.000 raíces × 20 operaciones y los objetivos P95 del
+plan quedan pendientes. La retención funcional sí se prueba con límites
+configurables y mantiene el máximo predeterminado de 5.000 raíces completas,
+sin caducidad temporal.
+
+SQLite usa transacciones y journal DELETE con sincronización FULL. Esta primera
+versión crea el esquema 1 y rechaza esquemas futuros; una futura migración de
+datos deberá implementar y cualificar su backup antes de cambiar el esquema.
+El historial guarda la selección actual y las versiones derivadas del modelo;
+no expone todavía una bitácora independiente de todos los cambios del toggle.
+
+La UI 26.924 añade los cuatro controles y el detalle por agente/inferencia.
+Los canales de instalación separan manifest, homes, perfil, token, puerto,
+identidad y acceso directo. La app DEV necesita su propio inicio de sesión.
+La evidencia de pruebas e instalación se documenta en la guía DEV; la rama y
+el PR permanecen en desarrollo hasta la aceptación visual y de uso real.

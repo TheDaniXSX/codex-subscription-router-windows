@@ -234,5 +234,6 @@ module.exports = async function verify26924({asar, archive, entries, initial}) {
   assert.ok(thread.includes('const CodexMuxThreadReact=cM;'), 'thread hooks use the 26.924 React binding');
   assert.ok(thread.includes('globalThis.__codexMuxRendererUiReady.then'), 'thread waits for lazy SSE helpers if it mounts first');
   assert.ok(thread.includes('children:[j,b,M,N,(0,SD.jsx)(CodexMuxThreadSubscription,{}),A,I]'), 'attribution is placed in the native local-thread summary');
+  await require('./turn-usage-render-26924.cjs')({read, entries});
   console.log('PASS: 26.924 lazy menu Rename, Auto/account selector, native usage modal, account-scoped reset query/redemption, profile refresh, plugin scope and thread helper readiness.');
 };

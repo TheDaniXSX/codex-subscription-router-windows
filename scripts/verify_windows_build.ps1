@@ -1600,6 +1600,33 @@ try {
         Add-Check -Name 'Launcher sidecar and build manifest agree on the control port' -Passed $sidecarValid -Detail (
             "manifestSchema=$schemaNumber; sidecarSchema=$launcherSchema; manifestPort=$controlPort; sidecarPort=$launcherPort; stateRootMatches=$stateRootMatches"
         )
+        $manifestChannel = [string](Get-JsonProperty -Object $manifest -Name 'installChannel')
+        if ([string]::IsNullOrWhiteSpace($manifestChannel)) { $manifestChannel = 'production' }
+        $launcherChannel = [string](Get-JsonProperty -Object $launcherConfig -Name 'installChannel')
+        if ([string]::IsNullOrWhiteSpace($launcherChannel)) { $launcherChannel = 'production' }
+        $channelValid = $manifestChannel -cin @('production', 'development') -and $launcherChannel -ceq $manifestChannel
+        if ($manifestChannel -eq 'development') {
+            $expectedHome = Get-NormalizedPath -Path (Join-Path $StateRoot 'PrimaryHome') -AllowMissing
+            foreach ($record in @($manifest, $launcherConfig)) {
+                foreach ($field in @('primaryCodexHome', 'primarySqliteHome')) {
+                    $value = [string](Get-JsonProperty -Object $record -Name $field)
+                    $channelValid = $channelValid -and -not [string]::IsNullOrWhiteSpace($value) -and
+                        (Get-NormalizedPath -Path $value -AllowMissing).Equals($expectedHome, [StringComparison]::OrdinalIgnoreCase)
+                }
+            }
+            $identity = Get-JsonProperty -Object $manifest -Name 'windowsIntegrationIsolation'
+            $channelValid = $channelValid -and
+                ([string](Get-JsonProperty -Object $identity -Name 'appUserModelId')) -ceq 'com.openai.codex.subscription-router.dev' -and
+                ([string](Get-JsonProperty -Object $identity -Name 'displayName')) -ceq 'Codex Subscription Router [DEV]'
+        }
+        else {
+            $channelValid = $channelValid -and
+                [string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $launcherConfig -Name 'primaryCodexHome')) -and
+                [string]::IsNullOrWhiteSpace([string](Get-JsonProperty -Object $launcherConfig -Name 'primarySqliteHome'))
+        }
+        Add-Check -Name 'Installation channel binds private development homes and identity' -Passed $channelValid -Detail (
+            "manifestChannel=$manifestChannel; launcherChannel=$launcherChannel"
+        )
     }
     catch {
         Add-Check -Name 'Launcher sidecar and build manifest agree on the control port' -Passed $false -Detail $_.Exception.Message
