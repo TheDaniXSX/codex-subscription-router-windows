@@ -61,8 +61,20 @@ defense, waits for the real app, and returns its exit code. Before Electron
 starts, the launcher places itself in an unnamed Windows Job Object with
 `KILL_ON_JOB_CLOSE`; the complete Electron descendant tree is therefore cleaned
 up if the launcher is terminated or the real desktop exits unexpectedly. It
-deliberately preserves `CODEX_HOME` and `CODEX_SQLITE_HOME`, keeping the
-currently signed-in account primary.
+preserves `CODEX_HOME` and `CODEX_SQLITE_HOME` in production, keeping the
+currently signed-in account primary. The development channel instead replaces
+both with the same private `StateRoot\PrimaryHome` directory. Its schema-2
+sidecar and build manifest must agree on channel, profile, port, homes, and
+desktop identity; changing only the sidecar cannot turn a DEV build into a
+production launch.
+
+`install_windows.ps1 -InstallChannel Development` installs under
+`%LOCALAPPDATA%\CSR-Dev\app` with state at `%LOCALAPPDATA%\CSR-Dev\data`.
+Custom development paths must remain separate children of that reserved tree.
+DEV uses `com.openai.codex.subscription-router.dev`, a `[DEV]` Start Menu
+shortcut, and a `[DEV]` window-title suffix. It starts with an empty account home
+and requires a separate login. Its launcher overrides inherited production
+homes, profile, state, and port without copying credentials or databases.
 
 The optional unpackaged `codex-router://` registration forwards only
 `codex-router://open?path=<encoded absolute local existing path>`. The launcher

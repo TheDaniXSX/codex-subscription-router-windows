@@ -142,7 +142,8 @@ class IntegrityTests(unittest.TestCase):
         def install_archive(staged, archive, unpacked):
             shutil.copyfile(self.archive, staged / "resources/app.asar")
 
-        def record_manifest(staged, source, destination, state, mux, launcher, preservation, backup, port):
+        def record_manifest(staged, source, destination, state, mux, launcher, preservation, backup, port, install_channel):
+            self.assertEqual(install_channel, patcher.PRODUCTION_CHANNEL)
             self.assertEqual((staged / "ChatGPT.original.exe").read_bytes(), self.original.read_bytes())
             checked = integrity.verify_desktop_integrity(staged / "ChatGPT.original.exe", staged / "ChatGPT.real.exe", staged / "resources/app.asar")
             self.assertEqual(preservation["desktopIntegrity"], checked)

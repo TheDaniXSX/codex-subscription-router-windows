@@ -24,6 +24,13 @@ def write_pe(path: Path, payload: bytes = b"payload") -> None:
 
 
 class ArgumentTests(unittest.TestCase):
+    def test_channel_defaults_keep_development_separate(self) -> None:
+        self.assertEqual(patcher.parse_args([]).destination, patcher.DEFAULT_DESTINATION)
+        args = patcher.parse_args(["--install-channel", "development"])
+        self.assertEqual(args.destination, patcher.development_root() / "app")
+        with mock.patch.dict(os.environ, {"CODEX_ROUTER_DATA_DIR": "production-state", "CODEX_MUX_HOME": "production-home"}):
+            self.assertEqual(patcher.resolve_state_root(patcher.DEVELOPMENT_CHANNEL), patcher.development_root() / "data")
+
     def test_contract_flags_are_stable(self) -> None:
         args = patcher.parse_args(
             [
@@ -37,6 +44,8 @@ class ArgumentTests(unittest.TestCase):
                 "launcher.exe",
                 "--control-port",
                 "61234",
+                "--install-channel",
+                "development",
                 "--force",
                 "--dry-run",
                 "--allow-untested-source",
@@ -47,12 +56,87 @@ class ArgumentTests(unittest.TestCase):
         self.assertEqual(args.mux, Path("mux.exe"))
         self.assertEqual(args.launcher, Path("launcher.exe"))
         self.assertEqual(args.control_port, 61234)
+        self.assertEqual(args.install_channel, patcher.DEVELOPMENT_CHANNEL)
         self.assertTrue(args.force)
         self.assertTrue(args.dry_run)
         self.assertTrue(args.allow_untested_source)
 
 
 class PathSafetyTests(unittest.TestCase):
+    def test_channel_guard_canonicalizes_short_parent_alias(self) -> None:
+        # Deterministic on filesystems where creating Windows 8.3 names is
+        # disabled: model the alias expansion done by Path.resolve().
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            short_parent = root / "RUNNER~1" / "AppData" / "Local"
+            long_parent = root / "RunnerAdmin" / "AppData" / "Local"
+            app, state = short_parent / "CSR-Dev" / "app", short_parent / "CSR-Dev" / "data"
+
+            def canonical(path: Path) -> Path:
+                relative = path.relative_to(short_parent)
+                return Path(os.path.normcase(str(long_parent / relative)))
+
+            with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(short_parent)}), mock.patch.object(patcher, "_canonical", side_effect=canonical) as resolver:
+                patcher.validate_install_channel_paths(app, state, patcher.DEVELOPMENT_CHANNEL)
+                resolver.assert_any_call(short_parent)
+                self.assertNotIn(mock.call(short_parent / "CSR-Dev"), resolver.call_args_list)
+                with self.assertRaisesRegex(RuntimeError, "production paths must not overlap"):
+                    patcher.validate_install_channel_paths(app, state, patcher.PRODUCTION_CHANNEL)
+            self.assertFalse(app.exists())
+            self.assertFalse(state.exists())
+
+    def test_channel_guard_does_not_authorize_resolved_development_junction(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            local = Path(temporary)
+            development = local / "CSR-Dev"
+            production = local / "Programs" / "Codex Subscription Router"
+
+            def canonical(path: Path) -> Path:
+                # Simulate CSR-Dev being a junction into the production tree.
+                if path == local:
+                    return Path(os.path.normcase(str(local)))
+                return Path(os.path.normcase(str(production / path.relative_to(development))))
+
+            with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(local)}), mock.patch.object(patcher, "_canonical", side_effect=canonical):
+                with self.assertRaisesRegex(RuntimeError, "strict children"):
+                    patcher.validate_install_channel_paths(development / "app", development / "data", patcher.DEVELOPMENT_CHANNEL)
+            self.assertFalse(development.exists())
+            self.assertFalse(production.exists())
+
+    def test_channel_guard_rejects_production_targets_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, {"LOCALAPPDATA": temporary}):
+            local = Path(temporary)
+            app, state = local / "CSR-Dev" / "app", local / "CSR-Dev" / "data"
+            patcher.validate_install_channel_paths(app, state, patcher.DEVELOPMENT_CHANNEL)
+            for destination, state_root in (
+                (local / "Programs" / "Codex Subscription Router", state),
+                (app, local / "Programs" / "Codex Subscription Router Data"),
+                (local / "CSR-Dev", state),
+                (app, app / "data"),
+            ):
+                with self.subTest(destination=destination, state=state_root), self.assertRaises(RuntimeError):
+                    patcher.validate_install_channel_paths(destination, state_root, patcher.DEVELOPMENT_CHANNEL)
+            with self.assertRaisesRegex(RuntimeError, "production paths must not overlap"):
+                patcher.validate_install_channel_paths(app, state, patcher.PRODUCTION_CHANNEL)
+            self.assertFalse(app.exists())
+            self.assertFalse(state.exists())
+
+    def test_existing_channel_and_state_binding_cannot_change(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, {"LOCALAPPDATA": temporary}):
+            app = Path(temporary) / "CSR-Dev" / "app"
+            state = Path(temporary) / "CSR-Dev" / "data"
+            config = app / "resources" / "codex-router" / "launcher-config.json"
+            config.parent.mkdir(parents=True)
+            manifest = app / patcher.BUILD_MANIFEST_NAME
+            manifest.write_text(json.dumps({"installChannel": "production"}), encoding="utf-8")
+            config.write_text(json.dumps({"installChannel": "development", "stateRoot": str(state)}), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "change an existing installation channel"):
+                patcher.validate_install_channel_paths(app, state, patcher.DEVELOPMENT_CHANNEL)
+            manifest.write_text(json.dumps({"installChannel": "development"}), encoding="utf-8")
+            patcher.validate_install_channel_paths(app, state, patcher.DEVELOPMENT_CHANNEL)
+            with self.assertRaisesRegex(RuntimeError, "different state root"):
+                patcher.validate_install_channel_paths(app, state.parent / "other", patcher.DEVELOPMENT_CHANNEL)
+
     def test_path_preflight_rejects_long_staging_before_copying(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "source"
@@ -114,6 +198,48 @@ class PathSafetyTests(unittest.TestCase):
             source.mkdir(parents=True)
             with self.assertRaisesRegex(RuntimeError, "cannot be a parent"):
                 patcher.validate_source_destination(source, parent)
+
+
+class BootstrapIdentityTests(unittest.TestCase):
+    def test_bootstrap_uses_distinct_identity_for_each_install_channel(self) -> None:
+        for channel, display_name, app_user_model_id in (
+            (
+                patcher.PRODUCTION_CHANNEL,
+                patcher.PRODUCT_NAME,
+                patcher.PRODUCTION_APP_USER_MODEL_ID,
+            ),
+            (
+                patcher.DEVELOPMENT_CHANNEL,
+                patcher.DEVELOPMENT_PRODUCT_NAME,
+                patcher.DEVELOPMENT_APP_USER_MODEL_ID,
+            ),
+        ):
+            with self.subTest(channel=channel), tempfile.TemporaryDirectory() as temporary:
+                extracted = Path(temporary)
+                bootstrap = extracted / ".vite" / "build" / "bootstrap-test.js"
+                bootstrap.parent.mkdir(parents=True)
+                bootstrap.write_text(
+                    "process.platform===`win32`&&e.app.setAppUserModelId(`official`);"
+                    "e.app.setName(`Official Codex`),e.app.setPath(`userData`,w({"
+                    "appDataPath:e.app.getPath(`appData`),buildFlavor:`win32`}));"
+                    "const x=process.env.CODEX_ELECTRON_USER_DATA_PATH;"
+                    "const y=process.env.CODEX_ELECTRON_USER_DATA_PATH;"
+                    "await updater.initialize();let{runMainAppStartup:run}=x;",
+                    encoding="utf-8",
+                )
+
+                patcher.patch_windows_bootstrap(extracted, channel)
+
+                patched = bootstrap.read_text(encoding="utf-8")
+                self.assertIn(f"e.app.setName(`{display_name}`)", patched)
+                self.assertIn(
+                    f"e.app.setAppUserModelId(`{app_user_model_id}`)", patched
+                )
+                self.assertNotIn("await updater.initialize();", patched)
+                self.assertEqual("window.on(`page-title-updated`" in patched, channel == patcher.DEVELOPMENT_CHANNEL)
+                if channel == patcher.DEVELOPMENT_CHANNEL:
+                    self.assertIn("event.preventDefault();window.setTitle(mark(title))", patched)
+                    self.assertIn(".endsWith(` [DEV]`)", patched)
 
 
 class SourceApprovalTests(unittest.TestCase):
@@ -541,6 +667,86 @@ class StagingTests(unittest.TestCase):
             self.assertEqual(
                 metadata["capabilityQualification"]["computerUse"]["qualification"],
                 "not-evaluated",
+            )
+            notice_directory = config_path.parent
+            for destination_name, source_path in (
+                (
+                    "NOTICE.md",
+                    patcher.PROJECT_ROOT / "NOTICE.md",
+                ),
+                (
+                    "LOBE-ICONS-LICENSE.txt",
+                    patcher.PROJECT_ROOT / "assets" / "LOBE-ICONS-LICENSE.txt",
+                ),
+                (
+                    "SQLITE-LICENSE.txt",
+                    patcher.PROJECT_ROOT / "assets" / "SQLITE-LICENSE.txt",
+                ),
+            ):
+                self.assertEqual(
+                    (notice_directory / destination_name).read_bytes(),
+                    source_path.read_bytes(),
+                )
+
+    def test_development_manifest_binds_shared_private_home_and_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            staged = root / "app"
+            (staged / "resources").mkdir(parents=True)
+            (staged / "resources" / "app.asar").write_bytes(b"patched")
+            mux = root / "mux.exe"
+            launcher = root / "launcher.exe"
+            write_pe(mux)
+            write_pe(launcher)
+            expected = patcher.TESTED_SOURCE_BUILDS["26.820.9563.0"]
+            source = patcher.SourceInfo(
+                package_root=None,
+                app_root=root / "source",
+                package_name="OpenAI.Codex",
+                package_version="26.820.9563.0",
+                package_full_name="test-package",
+                asar_version=expected["asar_version"],
+                asar_build=expected["asar_build"],
+                asar_sha256=expected["asar_sha256"],
+                codex_sha256=expected["codex_sha256"],
+            )
+            state = root / "dev-state"
+
+            patcher.write_build_manifest(
+                staged,
+                source,
+                root / "destination",
+                state,
+                mux,
+                launcher,
+                {},
+                None,
+                61235,
+                patcher.DEVELOPMENT_CHANNEL,
+            )
+
+            config = json.loads(
+                (staged / "resources" / "codex-router" / "launcher-config.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            metadata = json.loads(
+                (staged / patcher.BUILD_MANIFEST_NAME).read_text(encoding="utf-8")
+            )
+            expected_home = str(state / "PrimaryHome")
+            self.assertEqual(config["installChannel"], patcher.DEVELOPMENT_CHANNEL)
+            self.assertEqual(config["primaryCodexHome"], expected_home)
+            self.assertEqual(config["primarySqliteHome"], expected_home)
+            self.assertEqual(metadata["installChannel"], patcher.DEVELOPMENT_CHANNEL)
+            self.assertEqual(metadata["primaryCodexHome"], expected_home)
+            self.assertEqual(metadata["primarySqliteHome"], expected_home)
+            self.assertEqual(
+                metadata["windowsIntegrationIsolation"]["appUserModelId"],
+                patcher.DEVELOPMENT_APP_USER_MODEL_ID,
+            )
+            self.assertEqual(
+                metadata["windowsIntegrationIsolation"]["displayName"],
+                patcher.DEVELOPMENT_PRODUCT_NAME,
             )
 
 

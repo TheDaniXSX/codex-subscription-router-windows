@@ -93,6 +93,7 @@ class PatcherLifecycleTests(unittest.TestCase):
         _preservation: object,
         backup_path: Path | None = None,
         control_port: int | None = None,
+        install_channel: str = patcher.PRODUCTION_CHANNEL,
     ) -> dict[str, object]:
         manifest: dict[str, object] = {
             "schemaVersion": 1,

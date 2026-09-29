@@ -40,6 +40,19 @@ func main() {
 		fmt.Fprintf(os.Stdout, "root_source=%s\n", plan.RootSource)
 		fmt.Fprintf(os.Stdout, "state_root=%s\n", plan.StateRoot)
 		fmt.Fprintf(os.Stdout, "profile=%s\n", plan.Profile)
+		fmt.Fprintf(os.Stdout, "install_channel=%s\n", plan.InstallChannel)
+		fmt.Fprintf(os.Stdout, "app_user_model_id=%s\n", plan.AppUserModelID)
+		fmt.Fprintf(os.Stdout, "display_name=%s\n", plan.DisplayName)
+		if plan.InstallChannel == developmentChannel || plan.ConfigSchemaVersion == 3 {
+			fmt.Fprintf(os.Stdout, "primary_codex_home=%s\n", plan.PrimaryCodexHome)
+			fmt.Fprintf(os.Stdout, "primary_sqlite_home=%s\n", plan.PrimarySQLiteHome)
+		}
+		if plan.ConfigSchemaVersion == 3 {
+			fmt.Fprintf(os.Stdout, "shared_state_root=%s\n", plan.SharedStateRoot)
+			fmt.Fprintf(os.Stdout, "usage_data_root=%s\n", plan.UsageDataRoot)
+			fmt.Fprintf(os.Stdout, "shared_protocol=%d\n", plan.SharedProtocol)
+			fmt.Fprintf(os.Stdout, "activation_pair_id=%s\n", plan.ActivationPairID)
+		}
 		fmt.Fprintf(os.Stdout, "real_app=%s\n", plan.RealApp)
 		fmt.Fprintf(os.Stdout, "mux=%s\n", plan.Mux)
 		fmt.Fprintf(os.Stdout, "real_codex=%s\n", plan.RealCodex)
@@ -62,6 +75,16 @@ func main() {
 		if err := os.MkdirAll(plan.Profile, 0o700); err != nil {
 			return fmt.Errorf("create isolated profile %s: %w", plan.Profile, err)
 		}
+		if plan.InstallChannel == developmentChannel && plan.ConfigSchemaVersion != 3 {
+			for label, path := range map[string]string{
+				"primary Codex home":  plan.PrimaryCodexHome,
+				"primary SQLite home": plan.PrimarySQLiteHome,
+			} {
+				if err := os.MkdirAll(path, 0o700); err != nil {
+					return fmt.Errorf("create isolated %s %s: %w", label, path, err)
+				}
+			}
+		}
 		if err := superviseDescendants(); err != nil {
 			return fmt.Errorf("enable process-tree supervision: %w", err)
 		}
@@ -75,7 +98,7 @@ func main() {
 		if err := command.Start(); err != nil {
 			return fmt.Errorf("start %s: %w", plan.RealApp, err)
 		}
-		stopBrandingSync, brandingErr := startWindowBrandingSync(command.Process.Pid, executable)
+		stopBrandingSync, brandingErr := startWindowBrandingSync(command.Process.Pid, executable, plan.AppUserModelID)
 		if brandingErr != nil {
 			fmt.Fprintf(os.Stderr, "Codex Subscription Router launcher: window branding warning: %v\n", brandingErr)
 		}

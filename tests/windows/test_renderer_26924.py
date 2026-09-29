@@ -12,8 +12,95 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import patch_windows_app as patcher
 import windows_renderer_26924 as renderer
 
+TURN_USAGE_FIXTURE = (
+    "function DE(e){let t=(0,kE.c)(67);"
+    "let Se;t[38]!==se;workedForItem:oe,isCollapsed:ue,previousTurnNumber:v;"
+    "t[46]=oe,t[47]=Se;"
+    "function SE(e){let t=(0,CE.c)(15);"
+    "workedForItem:a,isCollapsed:o,previousTurnNumber:s;"
+    "let p;return t[8]!==n||t[9]!==r;"
+    "workedForItem:a,isCollapsed:o,onToggle:f})"
+    "t[13]=a,t[14]=p):p=t[14],p}var CE,wE"
+)
+
 
 class Renderer26924Tests(unittest.TestCase):
+    def test_turn_usage_footer_uses_native_turn_identity_and_is_a_button_sibling(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary) / "assets"
+            assets.mkdir()
+            conversation = assets / "conversation-blocks-fixture.js"
+            conversation.write_text(
+                TURN_USAGE_FIXTURE,
+                encoding="utf-8",
+            )
+            disclosure = assets / "collapsed-turn-disclosure-fixture.js"
+            disclosure.write_text(
+                "function b(e){const disclosure=(0,S.jsxs)(r,{children:[_,w,T]});"
+                "let O;return t[20]===E?O=t[21]",
+                encoding="utf-8",
+            )
+            turn = assets / "local-conversation-turn-fixture.js"
+            turn.write_text(
+                "function gc(e){workedForItem:di,hasFinalAssistantStarted:",
+                encoding="utf-8",
+            )
+
+            renderer._patch_turn_usage(assets, ROOT, "synthetic-token", 51234)
+
+            conversation_text = conversation.read_text(encoding="utf-8")
+            self.assertIn("function CodexMuxTurnUsage", conversation_text)
+            self.assertIn("AE.createElement", conversation_text)
+            self.assertIn("synthetic-token", conversation_text)
+            self.assertIn("http://127.0.0.1:51234/v1/usage", conversation_text)
+            self.assertIn("conversationId:e.conversationId,turnId:e.turnId", conversation_text)
+            self.assertIn("t[67]!==e.conversationId||t[68]!==e.turnId", conversation_text)
+            self.assertIn("t[15]!==ci||t[16]!==ti", conversation_text)
+            self.assertIn("t[15]=ci,t[16]=ti", conversation_text)
+            self.assertIn(
+                "turnUsage:(0,wE.jsx)(CodexMuxTurnUsage,{threadId:ci,turnId:ti})",
+                conversation_text,
+            )
+            disclosure_text = disclosure.read_text(encoding="utf-8")
+            self.assertIn("children:[E,e.turnUsage]", disclosure_text)
+            self.assertIn("children:[_,w,T]", disclosure_text)
+            self.assertLess(
+                disclosure_text.index("children:[_,w,T]"),
+                disclosure_text.index("children:[E,e.turnUsage]"),
+            )
+            self.assertIn(
+                "conversationId:d,turnId:h,hasFinalAssistantStarted:",
+                turn.read_text(encoding="utf-8"),
+            )
+
+    def test_turn_usage_anchor_drift_fails_before_writing_any_bundle(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary) / "assets"
+            assets.mkdir()
+            sources = {
+                "conversation-blocks-fixture.js": TURN_USAGE_FIXTURE,
+                "collapsed-turn-disclosure-fixture.js": (
+                    "function b(e){let O;return t[20]===E?O=t[21]"
+                ),
+                "local-conversation-turn-fixture.js": (
+                    "function gc(e){workedForItem:DIFFERENT,hasFinalAssistantStarted:"
+                ),
+            }
+            for name, source in sources.items():
+                (assets / name).write_text(source, encoding="utf-8")
+            before = {
+                path.name: path.read_text(encoding="utf-8")
+                for path in assets.iterdir()
+            }
+
+            with self.assertRaisesRegex(RuntimeError, "26.915 anchor count 0"):
+                renderer._patch_turn_usage(assets, ROOT, "synthetic-token", 51234)
+
+            self.assertEqual(
+                before,
+                {path.name: path.read_text(encoding="utf-8") for path in assets.iterdir()},
+            )
+
     def test_every_source_identity_field_is_pinned(self):
         package_version = "26.924.2738.0"
         fields = patcher.TESTED_SOURCE_BUILDS[package_version]

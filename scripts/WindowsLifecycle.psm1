@@ -207,13 +207,39 @@ function Read-CsrManifest {
         }
     }
     $schemaVersion = [int]$manifest.schemaVersion
-    if ($schemaVersion -notin @(1, 2)) {
+    if ($schemaVersion -notin @(1, 2, 3)) {
         throw "Unsupported router build manifest schema: $($manifest.schemaVersion)"
     }
-    if ($schemaVersion -eq 2) {
+    if ($schemaVersion -ge 2) {
         if ($null -eq $manifest.PSObject.Properties['controlPort'] -or
             [int]$manifest.controlPort -lt 49152 -or [int]$manifest.controlPort -gt 65535) {
-            throw "Router build manifest schema 2 has an invalid controlPort: $manifestPath"
+            throw "Router build manifest schema $schemaVersion has an invalid controlPort: $manifestPath"
+        }
+    }
+    if ($schemaVersion -eq 3) {
+        $sidecarPath = Join-Path $layout 'resources\codex-router\launcher-config.json'
+        $sidecar = Get-Content -LiteralPath $sidecarPath -Raw | ConvertFrom-Json
+        foreach ($field in @('schemaVersion', 'controlPort', 'installChannel', 'primaryCodexHome', 'primarySqliteHome',
+            'sharedStateRoot', 'sharedPrimaryHome', 'usageDataRoot', 'sharedProtocol', 'activationPairId')) {
+            if ($null -eq $manifest.PSObject.Properties[$field] -or $null -eq $sidecar.PSObject.Properties[$field] -or
+                [string]::IsNullOrWhiteSpace([string]$manifest.$field) -or [string]$manifest.$field -cne [string]$sidecar.$field) {
+                throw "Shared build manifest and launcher sidecar disagree on '$field'."
+            }
+        }
+        if ([int]$manifest.sharedProtocol -ne 1 -or [string]$manifest.activationPairId -cnotmatch '^[A-Za-z0-9_-]{8,128}$' -or
+            [string]$manifest.installChannel -cnotin @('production', 'development')) {
+            throw 'Unsupported shared protocol, activation pair, or installation channel.'
+        }
+        foreach ($field in @('sharedStateRoot', 'sharedPrimaryHome', 'usageDataRoot', 'primaryCodexHome', 'primarySqliteHome')) {
+            [void](Resolve-CsrFullPath -Path ([string]$manifest.$field))
+        }
+        if ([string]$manifest.primaryCodexHome -ine [string]$manifest.sharedPrimaryHome -or
+            [string]$manifest.primarySqliteHome -ine [string]$manifest.sharedPrimaryHome) {
+            throw 'Shared native homes must be identical.'
+        }
+        $sidecarProfile = Join-Path ([string]$sidecar.stateRoot) 'Profile'
+        if (-not (Resolve-CsrFullPath -Path $sidecarProfile).Equals((Resolve-CsrFullPath -Path ([string]$manifest.profilePath)), [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Shared launcher sidecar StateRoot differs from the build manifest profile.'
         }
     }
     $recordedDestination = Resolve-CsrFullPath -Path ([string]$manifest.destination)

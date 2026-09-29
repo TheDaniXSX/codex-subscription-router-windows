@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	routerAppUserModelID      = "com.openai.codex.subscription-router"
+	routerAppUserModelID      = productionAppUserModelID
 	wmSetIcon                 = 0x0080
 	iconSmall                 = 0
 	iconBig                   = 1
@@ -94,14 +94,15 @@ type propertyStoreVTable struct {
 }
 
 type windowBrandingApplier struct {
-	processID   uint32
-	icons       launcherIcons
-	launcher    string
-	callback    uintptr
-	applyPasses map[uintptr]int
-	applied     int
-	attempted   bool
-	firstError  error
+	processID      uint32
+	icons          launcherIcons
+	launcher       string
+	appUserModelID string
+	callback       uintptr
+	applyPasses    map[uintptr]int
+	applied        int
+	attempted      bool
+	firstError     error
 }
 
 func loadLauncherIcons(executable string) (launcherIcons, error) {
@@ -134,15 +135,19 @@ func (icons launcherIcons) close() {
 	}
 }
 
-func newWindowBrandingApplier(processID uint32, icons launcherIcons, launcher string) (*windowBrandingApplier, error) {
+func newWindowBrandingApplier(processID uint32, icons launcherIcons, launcher, appUserModelID string) (*windowBrandingApplier, error) {
 	if processID == 0 {
 		return nil, fmt.Errorf("window branding target process ID is zero")
 	}
+	if appUserModelID == "" {
+		return nil, fmt.Errorf("window branding AppUserModelID is empty")
+	}
 	applier := &windowBrandingApplier{
-		processID:   processID,
-		icons:       icons,
-		launcher:    launcher,
-		applyPasses: make(map[uintptr]int),
+		processID:      processID,
+		icons:          icons,
+		launcher:       launcher,
+		appUserModelID: appUserModelID,
+		applyPasses:    make(map[uintptr]int),
 	}
 	applier.callback = syscall.NewCallback(applier.visitWindow)
 	return applier, nil
@@ -172,7 +177,7 @@ func (applier *windowBrandingApplier) visitWindow(window uintptr, _ uintptr) uin
 	applier.applyPasses[window]++
 	applier.attempted = true
 
-	identityErr := setWindowIdentity(window, applier.launcher)
+	identityErr := setWindowIdentity(window, applier.launcher, applier.appUserModelID)
 	if identityErr != nil {
 		if applier.firstError == nil {
 			applier.firstError = identityErr
@@ -209,7 +214,7 @@ func setWindowIcon(window uintptr, kind uintptr, icon uintptr) bool {
 	return result != 0
 }
 
-func setWindowIdentity(window uintptr, launcherPath string) error {
+func setWindowIdentity(window uintptr, launcherPath, appUserModelID string) error {
 	if window == 0 {
 		return fmt.Errorf("window identity target is zero")
 	}
@@ -224,7 +229,7 @@ func setWindowIdentity(window uintptr, launcherPath string) error {
 	if err := store.setString(appUserModelRelaunchIconKey, launcherPath+",0"); err != nil {
 		return fmt.Errorf("set taskbar relaunch icon: %w", err)
 	}
-	if err := store.setString(appUserModelIDKey, routerAppUserModelID); err != nil {
+	if err := store.setString(appUserModelIDKey, appUserModelID); err != nil {
 		return fmt.Errorf("set taskbar AppUserModelID: %w", err)
 	}
 	if result, _, _ := syscall.SyscallN(store.vtable.commit, uintptr(unsafe.Pointer(store))); hresultFailed(result) {
@@ -300,7 +305,7 @@ func initializeWindowBrandingCOM() func() {
 // window covers Electron applying its own late startup branding without
 // continuous window-message traffic once the window is stable. Enumeration
 // also backs off from 500 ms to 5 seconds after startup settles.
-func startWindowBrandingSync(processID int, launcherPath string) (func(), error) {
+func startWindowBrandingSync(processID int, launcherPath, appUserModelID string) (func(), error) {
 	if processID <= 0 {
 		return func() {}, fmt.Errorf("window branding target process ID is invalid: %d", processID)
 	}
@@ -320,7 +325,7 @@ func startWindowBrandingSync(processID int, launcherPath string) (func(), error)
 		uninitializeCOM := initializeWindowBrandingCOM()
 		defer uninitializeCOM()
 
-		applier, applierErr := newWindowBrandingApplier(uint32(processID), icons, launcherPath)
+		applier, applierErr := newWindowBrandingApplier(uint32(processID), icons, launcherPath, appUserModelID)
 		if applierErr != nil {
 			return
 		}

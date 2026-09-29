@@ -33,7 +33,78 @@ def _replace_function(text: str, start: str, end: str, replacement: str, label: 
     return text[:begin] + replacement + text[finish:]
 
 
-def patch_renderer(extracted: Path, token: str, control_port: int) -> None:
+def _patch_turn_usage(assets: Path, root: Path, token: str, control_port: int) -> None:
+    def one(pattern: str, marker: str) -> Path:
+        matches = [
+            path
+            for path in assets.glob(pattern)
+            if marker in path.read_text(encoding="utf-8")
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"Expected one 26.924 {pattern} with marker, found {len(matches)}"
+            )
+        return matches[0]
+
+    usage_path = one("conversation-blocks-*.js", "function DE(e){let t=(0,kE.c)(67)")
+    usage = usage_path.read_text(encoding="utf-8")
+    usage_component = (root / "ui" / "turn-usage.js").read_text(encoding="utf-8")
+    usage_component = remap(usage_component, {"React": "AE"})
+    usage_component = usage_component.replace(
+        "__CODEX_MUX_CONTROL_PORT__", str(control_port)
+    ).replace("__CODEX_MUX_CONTROL_TOKEN__", token)
+    usage = replace(usage, "function DE(e){", usage_component + "\nfunction DE(e){")
+    # Both native components memoize their JSX. The added identity props must
+    # invalidate those caches when React reuses a row during navigation.
+    usage = replace(usage, "function DE(e){let t=(0,kE.c)(67)", "function DE(e){let t=(0,kE.c)(69)")
+    usage = replace(usage, "let Se;t[38]!==se", "let Se;t[67]!==e.conversationId||t[68]!==e.turnId||t[38]!==se")
+    usage = replace(usage, "t[46]=oe,t[47]=Se", "t[46]=oe,t[47]=Se,t[67]=e.conversationId,t[68]=e.turnId")
+    usage = replace(usage, "function SE(e){let t=(0,CE.c)(15)", "function SE(e){let t=(0,CE.c)(17)")
+    usage = replace(usage, "let p;return t[8]!==n||t[9]!==r", "let p;return t[15]!==ci||t[16]!==ti||t[8]!==n||t[9]!==r")
+    usage = replace(usage, "t[13]=a,t[14]=p):p=t[14],p}var CE,wE", "t[13]=a,t[14]=p,t[15]=ci,t[16]=ti):p=t[14],p}var CE,wE")
+    usage = replace(
+        usage,
+        "workedForItem:oe,isCollapsed:ue,previousTurnNumber:v",
+        "workedForItem:oe,conversationId:e.conversationId,turnId:e.turnId,"
+        "isCollapsed:ue,previousTurnNumber:v",
+    )
+    usage = replace(
+        usage,
+        "workedForItem:a,isCollapsed:o,previousTurnNumber:s",
+        "workedForItem:a,conversationId:ci,turnId:ti,isCollapsed:o,previousTurnNumber:s",
+    )
+    usage = replace(
+        usage,
+        "workedForItem:a,isCollapsed:o,onToggle:f})",
+        "workedForItem:a,turnUsage:(0,wE.jsx)(CodexMuxTurnUsage,{threadId:ci,turnId:ti}),"
+        "isCollapsed:o,onToggle:f})",
+    )
+
+    disclosure_path = one("collapsed-turn-disclosure-*.js", "function b(e){")
+    disclosure = disclosure_path.read_text(encoding="utf-8")
+    disclosure = replace(
+        disclosure,
+        "let O;return t[20]===E?O=t[21]",
+        "if(e.turnUsage!=null)E=(0,S.jsx)(`div`,{className:`inline-flex max-w-full "
+        "flex-wrap items-center gap-2`,children:[E,e.turnUsage]});"
+        "let O;return t[20]===E?O=t[21]",
+    )
+
+    turn_path = one("local-conversation-turn-*.js", "function gc(e){")
+    turn = turn_path.read_text(encoding="utf-8")
+    turn = replace(
+        turn,
+        "workedForItem:di,hasFinalAssistantStarted:",
+        "workedForItem:di,conversationId:d,turnId:h,hasFinalAssistantStarted:",
+    )
+
+    # Validate every source anchor before writing any of the three bundles.
+    usage_path.write_text(usage, encoding="utf-8")
+    disclosure_path.write_text(disclosure, encoding="utf-8")
+    turn_path.write_text(turn, encoding="utf-8")
+
+
+def patch_renderer(extracted: Path, token: str, control_port: int, *, calibration_enabled: bool = True) -> None:
     if json.loads((extracted / "package.json").read_text(encoding="utf-8"))["version"] != "26.924.22138":
         raise RuntimeError("Unsupported 26.924 renderer version")
     assets = extracted / "webview" / "assets"
@@ -284,3 +355,10 @@ def patch_renderer(extracted: Path, token: str, control_port: int) -> None:
         "children:[j,b,M,N,(0,SD.jsx)(CodexMuxThreadSubscription,{}),A,I]",
     )
     thread_path.write_text(thread, encoding="utf-8")
+
+    # A collapsed completed turn exposes the same native conversationId and
+    # turnId that the app-server uses for attribution. Keep the controls beside
+    # the disclosure button, as siblings, and attach the usage component to the
+    # native 26.924 collapsible activity row.
+    if calibration_enabled:
+        _patch_turn_usage(assets, root, token, control_port)
