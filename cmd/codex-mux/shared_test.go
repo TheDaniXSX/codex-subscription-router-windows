@@ -214,6 +214,12 @@ func TestSharedBindingRequiresIndependentUsageDirectory(t *testing.T) {
 	t.Setenv("CODEX_MUX_SHARED_ROOT", b.Root)
 	t.Setenv("CODEX_HOME", b.PrimaryHome)
 	t.Setenv("CODEX_MUX_USAGE_ROOT", b.UsageRoot)
+	if runtime.GOOS != "windows" {
+		if _, err := readSharedBinding(native); err == nil || !strings.Contains(err.Error(), "only on Windows") {
+			t.Fatalf("shared desktop mode must fail closed on unsupported platforms: %v", err)
+		}
+		return
+	}
 	if binding, err := readSharedBinding(native); err != nil || binding.NativeHash == "" || binding.RouterHash == "" {
 		t.Fatalf("valid binding failed: %v", err)
 	}

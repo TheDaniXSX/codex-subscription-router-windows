@@ -3,6 +3,31 @@
 Fecha: 2026-09-29. Rama: `codex/usage-calibration`.
 PR de desarrollo: <https://github.com/TheDaniXSX/codex-subscription-router-windows/pull/10>.
 
+## Pareja compartida preparada el 2026-09-29
+
+Paquetes construidos desde `111323884f798797064ea663cc189b6686069cc6`, con
+checkout limpio y los mismos binarios mux/launcher en ambos canales. Una
+corrección posterior sólo ajusta la expectativa de una prueba en Linux/macOS:
+el modo desktop compartido está cualificado exclusivamente en Windows.
+
+- Candidatos privados en `%LOCALAPPDATA%\CSR-Pair\sharing-v1\prod` y `dev`.
+- Binding de activación: `sharing-20260929-v1`.
+- Verificación de paquete PROD: **56 checks**; DEV: **55 checks**.
+- Contratos de ASAR: **15 bundles** modificados en PROD y **18 en DEV**, todos
+  parsean. PROD sin footer de calibración; DEV con controles y Pro ×20.
+- Activador `-ValidateOnly`: ambos paquetes, hashes del estado instalado,
+  tokens existentes y rutas compartidas correctos; no publica ningún paquete.
+- CLI real con dos clientes y homes sintéticos: proyectos/chats compartidos,
+  renombrado bidireccional y continuidad al desconectar un cliente; **0 inferencias**.
+- Los **14 hashes estáticos** controlados de las aplicaciones instaladas
+  permanecieron idénticos después de construir y verificar los candidatos.
+
+La preparación no acredita activación ni aceptación visual. Al cerrar ambas
+apps, el activador debe guardar su snapshot privado, publicar ambos paquetes y
+dejar `shared-activation.json` en estado `committed`. El diario local posterior
+es la evidencia autoritativa de esa activación. Logs privados de esta entrega:
+`.artifacts/shared-dev/`.
+
 ## Build aislada instalada antes de compartir datos
 
 Este apartado documenta la entrega anterior. El cambio posterior para compartir
