@@ -63,6 +63,46 @@ class ArgumentTests(unittest.TestCase):
 
 
 class PathSafetyTests(unittest.TestCase):
+    def test_channel_guard_canonicalizes_short_parent_alias(self) -> None:
+        # Deterministic on filesystems where creating Windows 8.3 names is
+        # disabled: model the alias expansion done by Path.resolve().
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            short_parent = root / "RUNNER~1" / "AppData" / "Local"
+            long_parent = root / "RunnerAdmin" / "AppData" / "Local"
+            app, state = short_parent / "CSR-Dev" / "app", short_parent / "CSR-Dev" / "data"
+
+            def canonical(path: Path) -> Path:
+                relative = path.relative_to(short_parent)
+                return Path(os.path.normcase(str(long_parent / relative)))
+
+            with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(short_parent)}), mock.patch.object(patcher, "_canonical", side_effect=canonical) as resolver:
+                patcher.validate_install_channel_paths(app, state, patcher.DEVELOPMENT_CHANNEL)
+                resolver.assert_any_call(short_parent)
+                self.assertNotIn(mock.call(short_parent / "CSR-Dev"), resolver.call_args_list)
+                with self.assertRaisesRegex(RuntimeError, "production paths must not overlap"):
+                    patcher.validate_install_channel_paths(app, state, patcher.PRODUCTION_CHANNEL)
+            self.assertFalse(app.exists())
+            self.assertFalse(state.exists())
+
+    def test_channel_guard_does_not_authorize_resolved_development_junction(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            local = Path(temporary)
+            development = local / "CSR-Dev"
+            production = local / "Programs" / "Codex Subscription Router"
+
+            def canonical(path: Path) -> Path:
+                # Simulate CSR-Dev being a junction into the production tree.
+                if path == local:
+                    return Path(os.path.normcase(str(local)))
+                return Path(os.path.normcase(str(production / path.relative_to(development))))
+
+            with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(local)}), mock.patch.object(patcher, "_canonical", side_effect=canonical):
+                with self.assertRaisesRegex(RuntimeError, "strict children"):
+                    patcher.validate_install_channel_paths(development / "app", development / "data", patcher.DEVELOPMENT_CHANNEL)
+            self.assertFalse(development.exists())
+            self.assertFalse(production.exists())
+
     def test_channel_guard_rejects_production_targets_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, {"LOCALAPPDATA": temporary}):
             local = Path(temporary)

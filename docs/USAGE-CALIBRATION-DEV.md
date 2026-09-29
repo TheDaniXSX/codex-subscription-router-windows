@@ -68,8 +68,8 @@ posterior; los datos originales se guardan para poder analizarlos.
 
 ## Evidencia técnica
 
-El estado de las pruebas automatizadas, del paquete instalado y de su arranque
-se registra en la entrega de la rama. Las pruebas sintéticas no sustituyen la
+El [informe de entrega](USAGE-CALIBRATION-EVIDENCE.md) registra las pruebas
+automatizadas, el paquete instalado y su arranque. Las pruebas sintéticas no sustituyen la
 aceptación del usuario con su sesión real ni certifican la precisión inicial del
 estimador: esta depende de las muestras seleccionadas.
 

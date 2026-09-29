@@ -853,9 +853,12 @@ def development_root() -> Path:
 
 def validate_install_channel_paths(destination: Path, state_root: Path, install_channel: str) -> None:
     # Reserve a short, dedicated development tree even for direct patcher calls.
-    # Resolving the candidate also prevents a junction inside CSR-Dev from
-    # redirecting an otherwise plausible lexical path into production.
-    reserved = Path(os.path.normcase(os.path.abspath(str(development_root()))))
+    # Canonicalize LOCALAPPDATA first so Windows 8.3 aliases such as RUNNER~1
+    # match the long path returned when resolving candidates. Keep CSR-Dev
+    # lexical: resolving that child could authorize a junction into production.
+    # Resolving each candidate then rejects any escape through such a junction.
+    development = development_root()
+    reserved = _canonical(development.parent) / os.path.normcase(development.name)
     for value in (destination, state_root):
         candidate = _canonical(value)
         inside = _is_relative_to(candidate, reserved)

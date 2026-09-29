@@ -1,6 +1,6 @@
 # Consumo por petición y calibración de cuota: plan de implementación
 
-Estado: **implementación DEV autorizada y en curso**.
+Estado: **DEV instalada y abierta; aceptación con cuenta real pendiente**.
 Decisiones de producto confirmadas el 2026-09-28. Rama: `codex/usage-calibration`.
 Baseline revisado y actualizado desde GitHub: `c4eb2eae4fc5c59987a901d373f7b58f5015c3a9`.
 
@@ -36,7 +36,7 @@ cuando hay un reloj monotónico disponible.
 
 Esta sección describe el punto de partida anterior a la implementación. El
 estado de la entrega DEV y las diferencias respecto al diseño están en la
-sección 13 y en `USAGE-CALIBRATION-DEV.md`.
+sección 13, `USAGE-CALIBRATION-DEV.md` y `USAGE-CALIBRATION-EVIDENCE.md`.
 
 - Paquete instalado: `OpenAI.Codex 26.924.2738.0`; ASAR `26.924.22138`, build `11645`.
 - El manifest instalado coincide con esos valores; los procesos observados usan
