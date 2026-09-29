@@ -104,6 +104,10 @@ Cada copia se comprueba por hash; las originales permanecen en sus rutas.
   Cero solicitudes de inferencia.
 - Adaptador de estado: 18 pruebas JS, 4 Python y 4 contratos ejecutados sobre
   los bundles exactos de 26.924; sin aceptación visual implícita.
+- Preparación y activación: 19 pruebas repetidas con rutas normales y con un
+  alias 8.3 real de Windows como TEMP. Los fixtures usan rutas canónicas, igual
+  que el preparador; esto corrige las comparaciones fallidas en el runner de
+  GitHub sin cambiar los paquetes preparados ni el código de activación.
 
 Estos resultados acreditan la implementación. El paquete instalado y la
 activación posterior tienen su propio manifiesto/recibo y diario local.

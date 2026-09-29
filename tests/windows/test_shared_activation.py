@@ -27,7 +27,9 @@ class SharedActivationTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='csr-activation-')
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # Preparation writes canonical paths. Windows CI can supply an 8.3
+        # TEMP alias, so synthetic manifests must use the same path spelling.
+        self.root = Path(self.temporary.name).resolve()
         self.operation = self.root / 'prepared'
         self.prod_state = self.root / 'production-data'
         self.dev_state = self.root / 'development-data'
@@ -251,7 +253,7 @@ if ($Failure -eq 'postcommit') {
 
     def test_primary_home_outside_managed_root_remains_allowed_and_untouched(self):
         with tempfile.TemporaryDirectory(prefix='csr-native-home-') as outside:
-            home = Path(outside)
+            home = Path(outside).resolve()
             (home / 'history-sentinel').write_text('preserved')
             self.update_bindings(primary=home)
             result = self.run_activation('-ValidateOnly')

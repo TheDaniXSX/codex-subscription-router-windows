@@ -24,7 +24,7 @@ SPEC.loader.exec_module(patcher)
 class SharedPreparationTests(unittest.TestCase):
     def test_shared_binding_is_explicit_complete_and_disjoint(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             values = [root / "prod-data", root / "native", root / "dev-data", 1, "test-pair-001"]
             binding = patcher.validate_shared_binding(*values)
             self.assertEqual(binding["sharedProtocol"], 1)
@@ -44,7 +44,7 @@ class SharedPreparationTests(unittest.TestCase):
 
     def test_prepared_destination_rejects_live_trees_and_existing_payloads(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source, installed, state = root / "source", root / "installed", root / "state"
             candidate = root / "candidate"
             self.assertEqual(patcher.validate_prepared_destination(True, candidate, False, source, installed, state, None), candidate)
@@ -60,7 +60,9 @@ class SharedPreparationTests(unittest.TestCase):
     def test_prepare_retains_candidate_without_publishing_or_writing_live_token(self):
         for existing_token in (False, True):
             with self.subTest(existing_token=existing_token), tempfile.TemporaryDirectory(prefix="csr-prp-") as temporary:
-                root = Path(temporary)
+                # TEMP may contain an 8.3 alias on the Windows CI runner;
+                # compare against the canonical paths written by preparation.
+                root = Path(temporary).resolve()
                 source, destination, state, prepared = root / "source", root / "installed", root / "state", root / "prepared"
                 resources = source / "resources"
                 (resources / "app.asar.unpacked").mkdir(parents=True)
@@ -128,7 +130,7 @@ class SharedPreparationTests(unittest.TestCase):
 
     def test_shared_manifests_keep_runtime_private_and_bind_both_channels(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             binding = patcher.validate_shared_binding(root / "prod-state", root / "native", root / "dev-data", 1, "test-pair-001")
             for channel in ("production", "development"):
                 staged = root / channel
