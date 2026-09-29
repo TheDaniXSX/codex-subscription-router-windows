@@ -1,6 +1,7 @@
 """Exact-version shared desktop state patch contracts; no installed files touched."""
 
 import json
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -12,6 +13,33 @@ import windows_shared_state as patcher
 
 
 class SharedGlobalStatePatchTests(unittest.TestCase):
+    def test_network_bootstrap_changes_only_local_shared_executable(self):
+        source = patcher.NETWORK_NATIVE.replace("let c=new $s(s,new uo)", "return s")
+        script = r'''
+const assert=require('node:assert/strict');
+const source=JSON.parse(process.argv[1]);
+const factory=new Function('rc','nl','process','require','performance',
+    'return async function(e){'+source+'}');
+async function run(spec,env,kind='local'){
+  return factory(async()=>spec,Error,{env},require,{now:()=>0})({hostConfig:{kind}});
+}
+(async()=>{
+ const native=require('node:path').resolve('native.exe');
+ const spec={executablePath:'mux.exe',args:['app-server','--analytics-default-enabled'],env:{sentinel:'kept'},cwd:'fixture'};
+ const env={CODEX_MUX_SHARED_ROOT:'shared',CODEX_MUX_REAL_CODEX:native};
+ assert.deepEqual(await run(spec,env),{...spec,executablePath:native});
+ assert.deepEqual(await run(spec,{}),spec);
+ assert.deepEqual(await run(spec,env,'ssh'),spec);
+ const wsl={...spec,spawnCommand:'wsl.exe',spawnArgs:['fixture']};
+ assert.deepEqual(await run(wsl,env),wsl);
+ await assert.rejects(run(spec,{CODEX_MUX_SHARED_ROOT:'shared'}));
+ await assert.rejects(run(spec,{...env,CODEX_MUX_REAL_CODEX:'relative.exe'}));
+ assert.equal(spec.executablePath,'mux.exe');
+})().catch(e=>{console.error(e);process.exitCode=1});
+'''
+        result = subprocess.run(['node', '-e', script, json.dumps(source)], capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def make_fixture(self, root):
         root = Path(root)
         (root / "package.json").write_text(json.dumps({"version": "26.924.22138"}), encoding="utf-8")
@@ -20,6 +48,7 @@ class SharedGlobalStatePatchTests(unittest.TestCase):
         build.mkdir(parents=True)
         assets.mkdir(parents=True)
         sources = {
+            build / "application-network-startup-fixture.js": patcher.NETWORK_STARTUP,
             build / "policy-fixture.js": "var wr=class{logger=r.Lt(`global-state`);" + patcher.CONSTRUCTOR + "}",
             build / "main-fixture.js": "\n".join([
                 patcher.SYNC_METHOD, patcher.ATOM_METHOD, patcher.GLOBAL_GET, patcher.GLOBAL_SET,
@@ -52,9 +81,13 @@ class SharedGlobalStatePatchTests(unittest.TestCase):
             shared = (root / "webview/assets/app-shared-fixture.js").read_text(encoding="utf-8")
             self.assertIn("csrBase:a?.csrBase", shared)
             self.assertIn("csrBase:c", shared)
+            network = (root / ".vite/build/application-network-startup-fixture.js").read_text(encoding="utf-8")
+            self.assertEqual(network, patcher.NETWORK_NATIVE)
+            self.assertIn("!s.spawnCommand", network)
+            self.assertIn("s={...s,executablePath:csrNative}", network)
 
     def test_missing_or_duplicate_anchors_never_partially_write(self):
-        for anchor in [patcher.CONSTRUCTOR, patcher.SYNC_METHOD, patcher.ATOM_METHOD,
+        for anchor in [patcher.NETWORK_STARTUP, patcher.CONSTRUCTOR, patcher.SYNC_METHOD, patcher.ATOM_METHOD,
                        patcher.GLOBAL_GET, patcher.GLOBAL_SET, patcher.ATOM_SEND,
                        patcher.ATOM_SYNC, patcher.ATOM_UPDATE, patcher.GLOBAL_TRANSFORM_GET,
                        patcher.GLOBAL_TRANSFORM_SET, patcher.GLOBAL_DIRECT_SET]:

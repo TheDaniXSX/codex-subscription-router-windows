@@ -122,6 +122,25 @@ no garantiza un snapshot consistente. No se incluye todavía una UI de exportaci
 
 ## Aceptación pendiente
 
+### Corrección del arranque 26.924
+
+La primera activación mostró `-32081` antes de abrir DEV: el auxiliar nativo de
+requisitos de red envía `network-initialize` con sólo `experimentalApi`, antes
+del `__codex_initialize__` principal con OAuth, atestación y extensiones. El
+auxiliar había inicializado el broker con capacidades incompatibles.
+
+El adaptador exacto de 26.924 dirige únicamente ese auxiliar local al CLI nativo
+validado por el launcher, conservando argumentos, entorno, directorio y ciclo
+de cierre. Mantiene su comportamiento original de requisitos de red y, cuando
+el flujo nativo lo solicita, cierre de sesión del home principal. No pasa por
+el broker de chats ni crea un ledger. WSL/remotos permanecen intactos; falta de
+una ruta nativa absoluta bloquea el arranque. Las conexiones principales siguen
+comprobando sus capacidades y compartiendo el broker. Esto no autoriza a ignorar
+diferencias arbitrarias entre capacidades de dos clientes principales.
+
+La regresión ejecutable cubre ruta local compartida, modo no compartido,
+remoto, WSL, ruta nativa ausente/relativa y conservación del objeto original.
+
 - Confirmar en las ventanas reales los tres proyectos y el historial esperado.
 - Crear/renombrar un proyecto o chat en una ventana y comprobarlo en la otra.
 - Cambiar una etiqueta de cuenta y comprobarla en ambos menús.

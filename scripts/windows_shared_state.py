@@ -13,6 +13,14 @@ CONSTRUCTOR = (
 )
 SYNC_METHOD = "sendPersistedAtomState(e,t){let n=this.globalState.get(`electron-persisted-atom-state`)??{}"
 HELPER_NAME = "codex-router-shared-global-state.cjs"
+NETWORK_STARTUP = "let o=performance.now(),s=await rc(e);if(s==null)throw new nl(`unavailable`);let c=new $s(s,new uo)"
+NETWORK_NATIVE = (
+    "let o=performance.now(),s=await rc(e);if(s==null)throw new nl(`unavailable`);"
+    "if(process.env.CODEX_MUX_SHARED_ROOT&&e.hostConfig.kind===`local`&&!s.spawnCommand){"
+    "let csrNative=process.env.CODEX_MUX_REAL_CODEX;"
+    "if(!csrNative||!require(`node:path`).isAbsolute(csrNative))throw new nl(`unavailable`);"
+    "s={...s,executablePath:csrNative}}let c=new $s(s,new uo)"
+)
 ATOM_METHOD = (
     "updatePersistedAtomState(e,t,n,r){if(t===`unread-thread-ids-by-host-v1`||jZ(t)&&!this.browserHostManager.isPrimaryWindowPersistenceOwner(e))return;"
     "let i=this.globalState.get(`electron-persisted-atom-state`)??{},a=r==null?n:uVe(i[t]??(r.legacyStorageKey==null?void 0:i[r.legacyStorageKey]),r);"
@@ -55,6 +63,8 @@ def patch_shared_global_state(extracted: Path) -> dict:
     build = extracted / ".vite" / "build"
     policy = _one(build, "policy-*.js", "var wr=class{logger=r.Lt(`global-state`)")
     main = _one(build, "main-*.js", SYNC_METHOD)
+    network = _one(build, "application-network-startup-*.js", NETWORK_STARTUP)
+    patched_network = _replace(network.read_text(encoding="utf-8"), NETWORK_STARTUP, NETWORK_NATIVE)
     policy_source = policy.read_text(encoding="utf-8")
     main_source = main.read_text(encoding="utf-8")
     assets = extracted / "webview" / "assets"
@@ -116,6 +126,7 @@ def patch_shared_global_state(extracted: Path) -> dict:
     main.write_text(patched_main, encoding="utf-8")
     initial.write_text(patched_initial, encoding="utf-8")
     shared.write_text(patched_shared, encoding="utf-8")
+    network.write_text(patched_network, encoding="utf-8")
     (build / HELPER_NAME).write_text(helper, encoding="utf-8")
     return {
         "version": 1,
@@ -124,6 +135,7 @@ def patch_shared_global_state(extracted: Path) -> dict:
         "helper": f".vite/build/{HELPER_NAME}",
         "policyBundle": policy.name,
         "mainBundle": main.name,
+        "networkStartup": "native-auxiliary-before-desktop-initialize",
         "rendererBundles": [initial.name, shared.name],
         "rendererWrites": "snapshot-required-leaf-cas",
         "arrays": "atomic-compare-and-set",
