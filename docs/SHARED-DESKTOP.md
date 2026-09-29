@@ -141,6 +141,15 @@ diferencias arbitrarias entre capacidades de dos clientes principales.
 La regresión ejecutable cubre ruta local compartida, modo no compartido,
 remoto, WSL, ruta nativa ausente/relativa y conservación del objeto original.
 
+El escritorio principal de esta versión tampoco envía la notificación
+`initialized`: usa directamente la respuesta satisfactoria de `initialize`.
+El broker completa la transición al recibir el primer mensaje posterior a esa
+respuesta y notifica una sola vez al backend. Antes de una respuesta
+satisfactoria continúa rechazando solicitudes. La regresión cubre el primer
+cliente, un segundo cliente con respuesta almacenada y una notificación
+explícita tardía sin duplicar la inicialización nativa. Una respuesta de
+handshake correcta por sí sola no acredita que todo el arranque haya terminado.
+
 - Confirmar en las ventanas reales los tres proyectos y el historial esperado.
 - Crear/renombrar un proyecto o chat en una ventana y comprobarlo en la otra.
 - Cambiar una etiqueta de cuenta y comprobarla en ambos menús.

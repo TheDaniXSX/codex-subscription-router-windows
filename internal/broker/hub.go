@@ -182,6 +182,7 @@ func (h *Hub) removeClient(c *Client) {
 		}
 	}
 	handler := h.handler
+
 	h.mu.Unlock()
 	c.closeOnce.Do(func() {
 		close(c.done)
@@ -242,6 +243,24 @@ func (c *Client) Send(message protocol.Message) error {
 		return errors.New("broker handler is not configured")
 	}
 	handler := h.handler
+	// The native 26.924 desktop starts issuing requests after the successful
+	// initialize response without sending an initialized notification. Complete
+	// that transition on its first subsequent message; never before success.
+	if c.initReady && !c.initialized && message.Method != "initialize" {
+		c.initialized = true
+		h.sequence++
+		c.initializedOrder = h.sequence
+		if !h.nativeInitialized {
+			h.nativeInitialized = true
+			h.mu.Unlock()
+			handler(protocol.Message{Method: "initialized"})
+			h.mu.Lock()
+			if h.clients[c.id] != c {
+				h.mu.Unlock()
+				return errors.New("broker client disconnected")
+			}
+		}
+	}
 	if message.Method == "" {
 		key := protocol.RequestIDKey(message.ID)
 		approval, ok := h.approvals[key]

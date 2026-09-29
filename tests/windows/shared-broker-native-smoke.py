@@ -110,7 +110,7 @@ def require_ok(client: RPCClient, method: str, params: dict[str, Any] | None = N
     return result_for(client, method, params)
 
 
-def init_client(client: RPCClient, experimental_api: bool = True) -> None:
+def init_client(client: RPCClient, experimental_api: bool = True, notify_initialized: bool = True) -> None:
     response = client.request(
         "initialize",
         {
@@ -124,7 +124,8 @@ def init_client(client: RPCClient, experimental_api: bool = True) -> None:
         raise SmokeFailure(f"initialize returned error code {code}")
     if not isinstance(response.get("result"), dict):
         raise SmokeFailure("initialize returned a non-object result")
-    client.notify("initialized")
+    if notify_initialized:
+        client.notify("initialized")
 
 
 def data_array(value: Any, method: str) -> list[Any]:
@@ -368,7 +369,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
 
             first = RPCClient(address, token, args.timeout)
             clients.append(first)
-            init_client(first, experimental_api=True)
+            init_client(first, experimental_api=True, notify_initialized=not args.implicit_initialized)
             summary["initializedClients"] += 1
 
             # A second broker must not own or replace the active shared state.
@@ -392,7 +393,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
 
             second = RPCClient(address, token, args.timeout)
             clients.append(second)
-            init_client(second, experimental_api=True)
+            init_client(second, experimental_api=True, notify_initialized=not args.implicit_initialized)
             summary["initializedClients"] += 1
 
             threads_before = data_array(require_ok(first, "thread/list", {"limit": 10, "useStateDbOnly": True}), "thread/list")
@@ -518,6 +519,7 @@ def main() -> int:
     parser.add_argument("--mux", required=True, help="new codex-mux.exe build")
     parser.add_argument("--native", required=True, help="isolated native Codex CLI executable (26.924)")
     parser.add_argument("--timeout", type=float, default=30.0, help="per-RPC/startup timeout in seconds")
+    parser.add_argument("--implicit-initialized", action="store_true", help="match native desktop: requests follow initialize success without a notification")
     parser.add_argument("--shutdown-timeout", type=float, default=10.0, help="graceful broker shutdown timeout")
     parser.add_argument("--keep-artifacts", action="store_true", help="write only a sanitized JSON summary in this directory")
     parser.add_argument("--artifacts-dir", help="destination for sanitized JSON summary with --keep-artifacts")

@@ -590,3 +590,42 @@ func TestLegacyConversationApprovalUsesActiveOwner(t *testing.T) {
 	}
 	empty(t, bo)
 }
+
+func TestDesktopRequestsAfterInitializeWithoutNotification(t *testing.T) {
+	f := newFixture(t)
+	for _, name := range []string{"first", "second"} {
+		c, out := f.client(name)
+		send(t, c, request("account/read", "1", `{}`))
+		if got := take(t, out); got.Error == nil {
+			t.Fatal("request accepted before initialize")
+		}
+		send(t, c, request("initialize", "2", `{"capabilities":{"experimentalApi":true}}`))
+		if name == "first" {
+			req := take(t, f.native)
+			f.write(protocol.Success(req.ID, json.RawMessage(`{"userAgent":"native"}`)))
+		}
+		if got := take(t, out); got.Error != nil {
+			t.Fatal(got.Error)
+		}
+		send(t, c, request("account/read", "3", `{}`))
+		if name == "first" {
+			if got := take(t, f.native); got.Method != "initialized" {
+				t.Fatalf("expected initialized, got %+v", got)
+			}
+		}
+		req := take(t, f.native)
+		if req.Method != "account/read" {
+			t.Fatalf("expected read, got %+v", req)
+		}
+		f.write(protocol.Success(req.ID, json.RawMessage(`{"account":null}`)))
+		if got := take(t, out); got.Error != nil || string(got.ID) != "3" {
+			t.Fatalf("read failed: %+v", got)
+		}
+		send(t, c, protocol.Message{Method: "initialized"})
+		select {
+		case m := <-f.native:
+			t.Fatalf("duplicate native initialization: %+v", m)
+		default:
+		}
+	}
+}
