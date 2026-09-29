@@ -6,11 +6,13 @@ const path = require('node:path');
 const [source, candidate] = process.argv.slice(2);
 if (!source || !candidate) throw Error('Provide the official and candidate app.asar paths');
 let checked = 0;
+const normalizedName = entry => entry.replace(/^[\\/]/, '').split(/[\\/]/).join(path.sep);
+const originalEntries = new Set(asar.listPackage(source).map(normalizedName));
 for (const entry of asar.listPackage(candidate)) {
   if (!/\.(?:c|m)?js$/.test(entry)) continue;
-  const name = entry.replace(/^[\\/]/, '').split(/[\\/]/).join(path.sep);
+  const name = normalizedName(entry);
   const content = asar.extractFile(candidate, name);
-  if (content.equals(asar.extractFile(source, name))) continue;
+  if (originalEntries.has(name) && content.equals(asar.extractFile(source, name))) continue;
   const result = spawnSync(process.execPath, ['--input-type=module', '--check'], {
     input: content,
     windowsHide: true,
