@@ -39,6 +39,20 @@ Other bundles: `application-network-startup-D74LEWDz.js`, `main-DkWgQSQe.js`,
 `local-conversation-thread-3c15e330d968.js`. The Electron integrity rebind is
 the same as for 26.924 below.
 
+The exact input passed signature/hash inventory and the installer dry run.
+Local tests: 136 of 137 Windows Python tests, including 8 new 26.928 tests
+(`test_private_acl_powershell7_handles_backup_paths_beyond_max_path` fails on
+the test machine only because `LongPathsEnabled` is `0`), 45 JS tests and
+`go test`. All 11 modified JavaScript bundles parse, and the packed-menu
+contract passes with synthetic accounts: Rename, Auto/account routing, Usage,
+scoped reset query/redemption, profile refresh, plugin scope and lazy helper
+readiness. A real install on one Windows 11 x64 machine passed all 54 verifier
+checks, including the 26.928 native-host isolation group and the ASAR
+integrity rebind. Launched through the launcher, the app selected the bundled
+runtime, completed the app-server handshake, and the control API listed the
+router accounts. Visual acceptance of the injected UI, release tests, live
+voice/Computer Use and Appshots were not checked.
+
 ### Previous source preview (2026-09-28)
 
 Exact patch profile: `windows-26.924.2738.0-x64-r1`.
