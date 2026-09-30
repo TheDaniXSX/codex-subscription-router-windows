@@ -7,7 +7,39 @@ publishing a destination if any expectation differs.
 
 ## Release 0.2.0
 
-### Current source preview (2026-09-28)
+### Current source profile (2026-09-30)
+
+Exact patch profile: `windows-26.928.2636.0-x64-r1`.
+
+| Component | Inspected candidate value |
+| --- | --- |
+| Official package | `OpenAI.Codex`, version `26.928.2636.0`, `x64` |
+| Internal desktop version/build | `26.928.21956` / `12404` |
+| Bundled Codex CLI | `0.159.2` |
+| Original `app.asar` SHA-256 | `fb7b2ee791bcbdb3c4a6375e9fec8fb404f3eaff995f0d293227354b298aff49` |
+| OpenAI Authenticode signer thumbprint | `C8FA9121679EB208B46A7171C7973575248DE56E` |
+| Computer Use tree | 2,367 files / 251,349,204 bytes; SHA-256 `75281eeee57e4f3f93403c1f06bef908cc2195301f9648b0f1e5ef6f656010e5` |
+| Computer Use Node manifest / binary | `24.21.0-cua.1` / `24.21.0` |
+| Computer Use runtime | `0.0.27/20260927214556-b77d38801cca` |
+| `@oai/cua` | `0.2.5` |
+
+26.928 keeps the 26.924 bundle layout and patch strategy; only minifier
+bindings moved, with two structural differences:
+
+- The native Chrome-host registry and state-path code moved from `src-*.js`
+  into the bootstrap bundle (`bootstrap-DvSEn4qy.js`). The profile patches it
+  there, and the verifier checks the 26.928 isolation markers as a group.
+- The static "out of Codex and Work usage" depletion banner messages are gone,
+  so no depletion banner is rewritten.
+
+Other bundles: `application-network-startup-D74LEWDz.js`, `main-DkWgQSQe.js`,
+`profile-dropdown-items-3bf36c95598d.js`, `app-initial-fd3c4b862660.js`,
+`app-shared-a906948d8868.js`, `modal-impl-303e71e5bac4.js`,
+`profile-ab5e9e0709fe.js`, `plugins-settings-cbe96e4a6efb.js` and
+`local-conversation-thread-3c15e330d968.js`. The Electron integrity rebind is
+the same as for 26.924 below.
+
+### Previous source preview (2026-09-28)
 
 Exact patch profile: `windows-26.924.2738.0-x64-r1`.
 

@@ -40,7 +40,13 @@ para distinguir build, protocolo, activación y aceptación live de voz/CUA.
 Los perfiles previos y la evidencia histórica están en
 [COMPATIBILITY.md](COMPATIBILITY.md).
 
-Para 26.924, la construcción valida la firma del `ChatGPT.exe` original y
+También incluye un perfil exacto para Codex `26.928.2636.0` (versión interna
+`26.928.21956`, build `12404`; Codex CLI `0.159.2`; `app.asar` SHA-256
+`fb7b2ee791bcbdb3c4a6375e9fec8fb404f3eaff995f0d293227354b298aff49`), con la
+misma estrategia que 26.924. Su cualificación está en
+[COMPATIBILITY.md](COMPATIBILITY.md).
+
+Para 26.924 y 26.928, la construcción valida la firma del `ChatGPT.exe` original y
 conserva esa copia como `ChatGPT.original.exe`, pero deriva
 `ChatGPT.real.exe` actualizando el digest `INTEGRITY/ELECTRONASAR`. El ejecutable
 derivado deja de tener la firma Authenticode de OpenAI. No lo presentes como un

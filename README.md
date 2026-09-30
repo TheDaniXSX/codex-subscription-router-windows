@@ -27,7 +27,7 @@ the Windows port.
 > Version 0.2.0 is a source-only Windows preview. Automated qualification is
 > extensive, but the final real-account, Appshots, Computer Use, signed MSIX,
 > and clean-VM gates remain open. It is not a stable Windows support claim.
-> The source includes the Codex 26.924 profile. Build/protocol qualification
+> The source includes the Codex 26.928 and 26.924 profiles. Build/protocol qualification
 > is separate from activation and live voice/Computer Use acceptance; see
 > [the qualification record](docs/UPGRADE-26924-PLAN.md).
 
@@ -98,19 +98,19 @@ Live voice and Computer Use acceptance remain separately tracked:
 | Component | Candidate value |
 | --- | --- |
 | Platform | Windows 10/11 x64 |
-| Official Store package candidate | `26.924.2738.0` (`x64`; runtime and release qualification pending) |
-| Internal desktop version/build | `26.924.22138` / `11645` |
-| Bundled Codex CLI | `0.158.0-alpha.2.1` |
-| Candidate original `app.asar` SHA-256 | `89fba67324ffb8dd54ccf13b6f097172e697549eeb1f26396f86f972c10c5b0c` |
-| Previously documented profile | `26.917.6896.0` (`26.917.51856`, build `10492`) and older profiles listed in [compatibility records](docs/COMPATIBILITY.md) |
+| Official Store package candidate | `26.928.2636.0` (`x64`; runtime and release qualification pending) |
+| Internal desktop version/build | `26.928.21956` / `12404` |
+| Bundled Codex CLI | `0.159.2` |
+| Candidate original `app.asar` SHA-256 | `fb7b2ee791bcbdb3c4a6375e9fec8fb404f3eaff995f0d293227354b298aff49` |
+| Previously documented profiles | `26.924.2738.0` (`26.924.22138`, build `11645`), `26.917.6896.0` and older profiles listed in [compatibility records](docs/COMPATIBILITY.md) |
 | Go | 1.26 or newer |
 | Node.js | 22.12 or newer |
 | Python | 3.10 or newer |
 
 The patcher verifies the official version, build, ASAR hash, renderer anchors,
 and source executable signatures before changing anything. An unknown upstream
-build is rejected by default rather than being partially patched. For 26.924,
-the local build derives `ChatGPT.real.exe` by rebinding the Electron ASAR
+build is rejected by default rather than being partially patched. For 26.924
+and 26.928, the local build derives `ChatGPT.real.exe` by rebinding the Electron ASAR
 integrity digest; the original signed `ChatGPT.exe` is retained as
 `ChatGPT.original.exe`, but the derived runtime executable does not retain
 OpenAI's Authenticode signature. The effect and runtime acceptance of this

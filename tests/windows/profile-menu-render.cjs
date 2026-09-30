@@ -27,6 +27,10 @@ async function main() {
   const primary = asar.extractFile(archive, primaryPath.replace(/^\//, '').split('/').join(path.sep)).toString();
   const initial = asar.extractFile(archive, initialPath.replace(/^\//, '').split('/').join(path.sep)).toString();
   const version = JSON.parse(asar.extractFile(archive, 'package.json').toString()).version;
+  if (version === '26.928.21956') {
+    await require('./profile-menu-render-26928.cjs')({asar, archive, entries, initial});
+    return;
+  }
   if (version === '26.924.22138') {
     await require('./profile-menu-render-26924.cjs')({asar, archive, entries, initial});
     return;

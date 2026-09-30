@@ -5,6 +5,27 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Codex 26.928 source profile
+
+- Add an exact compatibility profile for Windows Codex `26.928.2636.0`
+  (internal desktop `26.928.21956`, build `12404`; bundled CLI `0.159.2`;
+  original ASAR SHA-256
+  `fb7b2ee791bcbdb3c4a6375e9fec8fb404f3eaff995f0d293227354b298aff49`). It keeps
+  the 26.924 layout and patch strategy with new minifier bindings for the
+  updater, AppUserModelID, runtime-cache and log roots, Appshots gate, profile
+  dropdown, reset query/mutation, reset modal, profile refresh, plugin scope and
+  latest-request thread section.
+- The native Chrome-host registry code moved from `src-*.js` into the
+  bootstrap bundle; the profile patches and verifies it there.
+- 26.928 no longer ships the static "out of Codex and Work usage" banner
+  messages, so this profile does not rewrite a depletion banner.
+- Inventory the 26.928 Computer Use tree as 2,367 files / 251,349,204 bytes
+  (tree SHA-256 `75281eeee57e4f3f93403c1f06bef908cc2195301f9648b0f1e5ef6f656010e5`),
+  runtime `0.0.27/20260927214556-b77d38801cca`, Node `24.21.0-cua.1` /
+  `24.21.0`, `@oai/cua` `0.2.5`. Static payload evidence only.
+- The Electron integrity rebind is unchanged from 26.924: the derived
+  `ChatGPT.real.exe` does not retain OpenAI's Authenticode signature.
+
 ### Codex 26.924 source preview
 
 - Add an exact compatibility profile for Windows Codex `26.924.2738.0`
