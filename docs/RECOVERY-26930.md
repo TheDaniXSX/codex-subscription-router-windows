@@ -5,8 +5,8 @@ Fecha: 5 de octubre de 2026. Base única: `c4eb2eae4fc5c59987a901d373f7b58f5015c
 Se ha recuperado el checkout local antes de adaptar la compatibilidad. Los
 commits posteriores y 39 archivos modificados/nuevos se conservaron en una
 copia de recuperación externa, con bundle Git y hashes verificados; no se
-incorporan a esta implementación. El GitHub remoto no se modifica por esta
-operación local.
+incorporan a esta implementación. La recuperación local no reescribió el
+historial remoto; esta adaptación se publica como descendiente de `c4eb2ea`.
 
 ## Funcionalidades conservadas y excluidas
 
@@ -55,6 +55,7 @@ compactación con contexto completo que necesita esa lógica.
 | JavaScript del ASAR real modificado | 11 bundles parsean |
 | Menú empaquetado | Rename, login, Auto/manual, resets, perfiles, plugins y atribución PASS con fixtures |
 | Verificador completo del candidato | 53 comprobaciones PASS |
+| Verificador de la instalación tras corregir el menú | 55 comprobaciones PASS |
 | App-server real con homes vacíos | Passthrough y router PASS, sin autenticación ni inferencia real |
 | Computer Use y Appshots | Contratos estáticos PASS, no aceptación interactiva |
 | Icono embebido del launcher | PASS |
@@ -77,13 +78,33 @@ audio, Computer Use interactivo, consumo real de resets ni facturación. No se
 ejecutan inferencias/login/redenciones reales durante la preparación. Una build
 preparada tampoco significa que se haya reemplazado la aplicación instalada.
 
-## Operación
+## Instalación aplicada
+
+El 5 de octubre se sustituyó la instalación habitual en
+`%LOCALAPPDATA%\Programs\Codex Subscription Router` por esta adaptación a
+26.930, conservando los datos y las tres cuentas. La aplicación DEV se retiró
+del servicio y se conservó en la copia de recuperación; sus datos no se borraron.
+
+Después se corrigió el menú de cuentas de la nueva barra lateral: la ruta
+`sidebarFooter` debe incluir los controles del router, además de la ruta clásica.
+Las cuatro pruebas del renderer contra los bundles oficiales pasan, incluyendo
+ambas rutas. La instalación corregida pasó 55 verificaciones y la comprobación
+autenticada de salud confirmó tres cuentas y procesos activos. Estos contratos
+empaquetados no sustituyen una aceptación visual interactiva ni certifican
+inferencia Remote, voz o Computer Use reales.
+
+Cada sustitución conservó una copia recuperable de la aplicación anterior y
+una instantánea del estado. El selector manual y los historiales se preservaron;
+no se añadió la arquitectura de analítica ni PROD/DEV retirada.
+
+## Preparación inicial (evidencia histórica)
 
 El candidato comprobado está en `%USERPROFILE%\csr930\app`, con datos de prueba
 independientes en `%USERPROFILE%\csr930-state`. No se creó acceso directo ni se
 lanzó Electron. El manifiesto del candidato tiene SHA-256
 `51887ba329778c19e1f79849e098e9722897dad087d7f111e7009296216d893c`.
-Esto no sustituye la instalación habitual ni sus cuentas.
+Ese candidato inicial no sustituyó por sí mismo la instalación habitual ni sus
+cuentas; la sustitución posterior se describe arriba.
 
 Construir con dependencias bloqueadas y PowerShell 7. Desde el host empaquetado
 de Codex, Windows puede redirigir LocalAppData a una ruta de paquete más larga.
