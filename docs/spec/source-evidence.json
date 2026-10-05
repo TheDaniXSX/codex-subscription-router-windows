@@ -1,0 +1,23 @@
+{
+  "documentDate": "2026-10-05",
+  "scope": "Immutable historical specification; c4eb2ea only",
+  "repository": "https://github.com/TheDaniXSX/codex-subscription-router-windows",
+  "commit": "c4eb2eae4fc5c59987a901d373f7b58f5015c3a9",
+  "commitSubject": "Merge pull request #9 from TheDaniXSX/codex/update-26-924",
+  "commitDate": "2026-09-28T10:49:02+02:00",
+  "gitTreeObject": "1a2869e94301b18c0b4848e5bd8e15faae8d820d",
+  "gitObjectFormat": "sha1",
+  "trackedFileCount": 267,
+  "sourceMethod": "git show and git ls-tree against the exact commit, not the working tree",
+  "workingTreeAndLaterCommitsExcluded": true,
+  "candidateOfficialPackage": "26.924.2738.0",
+  "candidateAsarVersion": "26.924.22138",
+  "candidateBuildNumber": "11645",
+  "candidateCliVersion": "0.158.0-alpha.2.1",
+  "candidateOriginalAsarSha256": "89fba67324ffb8dd54ccf13b6f097172e697549eeb1f26396f86f972c10c5b0c",
+  "qualificationMeaning": "Historical source/build/protocol evidence, not a claim of live desktop stability",
+  "routerTestsExecutedDuringThisDocumentation": [],
+  "runtimeChangesDuringThisDocumentation": [],
+  "documentationIsNew": true,
+  "note": "These specification and portal files are newly authored; they were not files present at c4eb2ea."
+}

@@ -5,6 +5,22 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Single-app recovery and Codex 26.930
+
+- Restore the `c4eb2ea` feature set and adapt the exact installed Windows source
+  `26.930.4958.0` (ASAR `26.930.41038`, build `13022`, CLI `0.160.0`). Keep
+  account management, Auto/strict per-inference routing, resets, profiles,
+  plugins and last-request attribution. Do not import the later cost analytics,
+  calibration, usage ledger or shared PROD/DEV/broker implementation.
+- Retain exact source hashes, signatures, private state, upstream helper
+  preservation, opt-in Appshots and disabled copied-app updater. Source/build
+  checks and live desktop/voice/Computer Use acceptance remain distinct.
+- Update only the compatible transitive `brace-expansion` build dependency from
+  5.0.9 to 5.0.12, keeping `@electron/asar` at 4.3.0. Add offline guards against
+  reintroducing the retired experimental runtime.
+- Preserve the frozen baseline specification and document the recovery in
+  `docs/RECOVERY-26930.md`.
+
 ### Codex 26.924 source preview
 
 - Add an exact compatibility profile for Windows Codex `26.924.2738.0`

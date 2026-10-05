@@ -27,9 +27,20 @@ the Windows port.
 > Version 0.2.0 is a source-only Windows preview. Automated qualification is
 > extensive, but the final real-account, Appshots, Computer Use, signed MSIX,
 > and clean-VM gates remain open. It is not a stable Windows support claim.
-> The source includes the Codex 26.924 profile. Build/protocol qualification
+> The recovered source includes the Codex 26.930 profile, based on `c4eb2ea`
+> without the later usage-cost/calibration or shared PROD/DEV subsystems.
+> Build/protocol qualification
 > is separate from activation and live voice/Computer Use acceptance; see
-> [the qualification record](docs/UPGRADE-26924-PLAN.md).
+> [the recovery record](docs/RECOVERY-26930.md).
+
+## Recovery baseline
+
+This checkout restores the single-app feature set of `c4eb2ea` and updates only
+the official desktop compatibility. Auto/strict per-inference selection,
+account management, resets, profiles, plugins and last-request attribution are
+retained. API cost analytics, quota calibration, the usage ledger, DEV/PROD
+channels and the shared desktop broker are not included. The frozen
+[baseline specification](docs/spec/SPECIFICATION.md) describes that boundary.
 
 ## Highlights
 
@@ -80,9 +91,11 @@ Codex Subscription Router (Windows)
              └── thread ID → persistent account owner
 ```
 
-In Auto mode, each new inference request compares the quota burn rate needed
-before each weekly reset, then applies a capped banked-reset boost. Short-window
-usage, pinned-thread count, and stable account order break close results. An
+In Auto mode, each new inference compares long-window quota urgency before its
+reset, applies a capped banked-reset boost, and accounts for in-flight pressure.
+Short/long capacity must be known and fresh. Ties use fewer in-flight requests,
+more remaining capacity and account ID; pinned-thread count belongs to the
+legacy non-request-spending path, not this Windows launcher. An
 explicit subscription selection applies to each new inference request without
 moving the thread's history or plugin ownership.
 
@@ -98,18 +111,18 @@ Live voice and Computer Use acceptance remain separately tracked:
 | Component | Candidate value |
 | --- | --- |
 | Platform | Windows 10/11 x64 |
-| Official Store package candidate | `26.924.2738.0` (`x64`; runtime and release qualification pending) |
-| Internal desktop version/build | `26.924.22138` / `11645` |
-| Bundled Codex CLI | `0.158.0-alpha.2.1` |
-| Candidate original `app.asar` SHA-256 | `89fba67324ffb8dd54ccf13b6f097172e697549eeb1f26396f86f972c10c5b0c` |
-| Previously documented profile | `26.917.6896.0` (`26.917.51856`, build `10492`) and older profiles listed in [compatibility records](docs/COMPATIBILITY.md) |
+| Official Store package candidate | `26.930.4958.0` (`x64`; live runtime acceptance separate) |
+| Internal desktop version/build | `26.930.41038` / `13022` |
+| Bundled Codex CLI | `0.160.0` |
+| Candidate original `app.asar` SHA-256 | `644fec616f2fbd203266d806c2ed9a26869abb84e76fbd6f5a33469e8cfd1686` |
+| Recovery baseline | `c4eb2ea`, with `26.924.2738.0` and older profiles in [compatibility records](docs/COMPATIBILITY.md) |
 | Go | 1.26 or newer |
 | Node.js | 22.12 or newer |
 | Python | 3.10 or newer |
 
 The patcher verifies the official version, build, ASAR hash, renderer anchors,
-and source executable signatures before changing anything. An unknown upstream
-build is rejected by default rather than being partially patched. For 26.924,
+and source executable signatures before publishing anything. An unknown upstream
+build is rejected by default rather than being partially patched. For 26.924 and later reviewed profiles,
 the local build derives `ChatGPT.real.exe` by rebinding the Electron ASAR
 integrity digest; the original signed `ChatGPT.exe` is retained as
 `ChatGPT.original.exe`, but the derived runtime executable does not retain
@@ -257,7 +270,7 @@ patch. After the official app updates, wait until the new hashes and anchors
 have been reviewed, close only the router copy, then rebuild:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows.ps1 -Force
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_windows.ps1 -Force
 ```
 
 Existing destinations are moved to timestamped directories beside the install
@@ -316,7 +329,8 @@ defines the non-interactive contract gate and the remaining VM checklist.
   remote Code Mode and its WebSocket transport as experimental, so this preview
   deliberately avoids that transport and still pins every supported desktop/app-
   server build exactly. See the [official app-server documentation](https://learn.chatgpt.com/docs/app-server).
-- The initial merged history fetch is limited to 500 threads per account.
+- The merged history fetch is bounded to 2,000 threads per account, with up to
+  500 items per combined page.
 - Combined “skills explored” totals can count the same skill once per account
   because the upstream profile response exposes counts rather than skill IDs.
 - The inherited Chrome Native Messaging paths remain disabled and the official

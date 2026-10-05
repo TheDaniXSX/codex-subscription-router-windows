@@ -7,7 +7,37 @@ publishing a destination if any expectation differs.
 
 ## Release 0.2.0
 
-### Current source preview (2026-09-28)
+### Current single-app recovery (2026-10-05)
+
+Exact patch profile: `windows-26.930.4958.0-x64-r1`, using the features of
+`c4eb2ea` rather than the later usage-calibration/shared-desktop branch.
+
+| Component | Inspected candidate value |
+| --- | --- |
+| Official package | `OpenAI.Codex`, version `26.930.4958.0`, `x64` |
+| Internal desktop version/build | `26.930.41038` / `13022` |
+| Bundled Codex CLI | `0.160.0` |
+| Original `app.asar` SHA-256 | `644fec616f2fbd203266d806c2ed9a26869abb84e76fbd6f5a33469e8cfd1686` |
+| OpenAI Authenticode signer thumbprint | `AAB04F57830B69182775AB3CEB6CE37981FE71C5` |
+| Computer Use tree | 2,367 files / 251,349,224 bytes; SHA-256 `2ac3d5a9e74bb829e61178feed98a404c6d466d839f87e21c30c00a476c62317` |
+| Computer Use Node manifest / binary | `24.21.0-cua.1` / `24.21.0` |
+| Computer Use runtime | `0.0.27/20260927214556-b77d38801cca` |
+| `@oai/cua` | `0.2.5` |
+
+This is the newest official package found installed on the inspected machine.
+The information-only Store update check could not determine whether another
+eligible package exists without starting its download process. Do not treat
+this version as a globally verified latest release.
+
+The bootstrap, renderer and native bindings are adapted to this exact payload;
+unknown versions/hashes/anchors remain rejected. There is one router app and
+schema-2 launcher/build metadata, no shared broker, channel or usage ledger.
+The signed original desktop is retained; the derived runtime uses the reviewed
+ASAR digest rebind and does not retain valid OpenAI Authenticode. Live desktop,
+voice audio, Computer Use and credit consumption require their own acceptance.
+See [RECOVERY-26930.md](RECOVERY-26930.md) for current checks and limitations.
+
+### Previous source preview (2026-09-28)
 
 Exact patch profile: `windows-26.924.2738.0-x64-r1`.
 

@@ -217,6 +217,16 @@ class WindowsSourceInventoryTests(unittest.TestCase):
             ("lX", "M_"),
         ):
             current_26924 = current_26924.replace(old, new)
+        current_26930 = current
+        for old, new in (
+            ("function LZ(e)", "async function AI(e)"),
+            ("function RZ(e)", "async function jI(e)"),
+            ("function XX(e)", "function UF(e)"),
+            ("(0,i.join)", "(0,g.join)"),
+            ("r.default.homedir()", "C.default.homedir()"),
+            ("lX", "nF"),
+        ):
+            current_26930 = current_26930.replace(old, new)
         archive = Path(self.temporary.name) / "current.asar"
         # Load only the verifier's inspection functions: no installed app,
         # signatures, state, or inventory participates in this focused test.
@@ -235,6 +245,11 @@ $script:Checks.ToArray() | ConvertTo-Json -Compress
         variants = (
             ("current", current, True),
             ("current 26.924", current_26924, True),
+            ("current 26.930", current_26930, True),
+            ("mixed 26.930 aliases", current_26930.replace("async function jI(e){return}", "function sy(e){return}"), False),
+            ("missing 26.930 state isolation", current_26930.replace("CODEX_MUX_HOME,nF", "LOCALAPPDATA,nF"), False),
+            ("active 26.930 registry mutation", current_26930 + " async function jI(e){let t=e.manifestPath;process.platform===`win32`", False),
+            ("active 26.930 manifest lookup", current_26930 + " case`win32`:return r.Gr(`windows`).map", False),
             ("mixed aliases", current.replace("function RZ(e){return}", "function sY(e){return}"), False),
             ("missing state isolation", current.replace("CODEX_MUX_HOME,lX", "LOCALAPPDATA,lX"), False),
             ("active registry mutation", current + " function LZ(e){if(process.platform!==`win32`)return;", False),
