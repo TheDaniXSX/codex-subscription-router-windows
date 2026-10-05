@@ -75,6 +75,61 @@ module.exports = async function verify26930({asar,archive,entries,initial}) {
   const authenticated=call=>assert.equal(call.headers['X-Codex-Mux-Token'],token,'request uses packed token (redacted)');
   const render=()=>{state.begin();return context.CodexMuxAccountMenu().props.children;};
   const find=action=>render().find(row=>row?.props?.['data-codex-mux-action']===action);
+
+  // Execute the real native container, including its early sidebarFooter
+  // return and Pi's additionalItems slot. A marker in the legacy branch alone
+  // cannot prove that the menu used by the current desktop mounts the router.
+  const nativeAtoms={u:'desktop',ye:'pet',Ji:'workspace',Ir:'profile-enabled',Ot:'limits'};
+  const nativeHooks=hooks([null]);
+  const nativeMenuScope={query:{fetch:async()=>({})},get:()=>({success(){},danger(){}})};
+  const nativeContext=vm.createContext({
+    ...nativeAtoms,Wi:{c:n=>Array(n).fill(Symbol.for('react.memo_cache_sentinel'))},
+    Ii:{c:n=>Array(n).fill(Symbol.for('react.memo_cache_sentinel'))},
+    $:{jsx,jsxs:jsx,Fragment:'fragment'},Q:{jsx,jsxs:jsx,Fragment:'fragment'},
+    Gi:{...nativeHooks,Fragment:'fragment'},ut:()=>nativeMenuScope,_:{},
+    It:atom=>atom===nativeAtoms.u?true:atom===nativeAtoms.ye?false:atom===nativeAtoms.Ir?{isEnabled:false,isLoading:false}:atom===nativeAtoms.Ot?{data:null,isLoading:false}:null,
+    it:()=>()=>{},F:()=>()=>{},h:()=>({accountId:'primary',email:null,userId:null,authMethod:'chatgpt',planAtLogin:'plus',requiresAuth:true}),
+    Gt:()=>({data:{accounts:[]}}),tn:()=>({data:{id:'primary',structure:'personal',plan_type:'plus'},isError:false}),
+    gt:()=>({getContext:()=>({user:{customIDs:{}}})}),Ne:()=>false,Oe:()=>false,
+    re:()=>({data:{plan:'plus',accountId:'primary'}}),xt:()=>false,cn:()=>false,Dn:()=>null,
+    sr:()=>({isProfileVisible:false}),Un:()=>()=>'',Nn:()=>null,yt:()=>null,
+    T:{},sn:{},fr:'host',p:'primary',Be:atom=>atom==='host'?{data:null}:null,kr:()=>null,
+    wr:()=>({modelSettings:{model:null}}),he:()=>({formatMessage:({defaultMessage})=>defaultMessage}),
+    mn:()=>false,Jt:()=>[],Sr:()=>null,kn:()=>[],ln:()=>false,
+    jr:()=>({isUsageSettingsVisible:false,isUsageSettingsAccessLoading:false}),Kt:()=>({data:undefined}),Ui:()=>null,
+    Vi:()=>false,en:()=>()=>{},bn:()=>'desktop',on:()=>null,Bn:()=>null,Cn:()=>'Pro',
+    U:'NativeMenuItem',L:'NativeMessage',H:{Separator:'separator',ItemIcon:'icon'},
+    ii:'NativeAdditional',Wn:'NativeUsage',yr:'NativeAvatar',Me:'NativeAvatarFallback',
+    CodexMuxAccountMenu:context.CodexMuxAccountMenu,dt:{dispatchMessage(){}},
+    Qr:{icon:'icon'},w:(...values)=>values.filter(Boolean).join(' '),nt:'NativeIcon',
+    ne:{},se:{},We:{},Nt:{},Je:{},mt:{},Ee:{},Qe:{},ft:{},wi:'NativeHelp',
+  });
+  vm.runInContext(extractFunction(menu,'Ri')+';'+extractFunction(menu,'Pi')+';'+extractFunction(menu,'Fi'),nativeContext);
+  const expandNative=node=>{
+    if(Array.isArray(node))return node.map(expandNative);
+    if(node==null||typeof node!=='object')return node;
+    if(node.type===context.CodexMuxAccountMenu)return node;
+    if(typeof node.type==='function')return expandNative(node.type(node.props));
+    return {...node,props:{...node.props,children:expandNative(node.props?.children)}};
+  };
+  const flatten=node=>Array.isArray(node)?node.flatMap(flatten):node==null||typeof node!=='object'?[]:[node,...flatten(node.props?.children)];
+  for(const sidebarFooter of [undefined,{profileIdentity:{displayName:'Fixture owner',isProfileAvailable:true}}]){
+    nativeHooks.begin();
+    const tree=expandNative(nativeContext.Ri({sidebarFooter,open:true,onClose:()=>{}}));
+    const mounted=flatten(tree).filter(node=>node.type===context.CodexMuxAccountMenu);
+    assert.equal(mounted.length,1,`${sidebarFooter?'sidebarFooter':'legacy'} menu mounts exactly one account manager`);
+    state.begin();
+    const visible=flatten(mounted[0].type(mounted[0].props));
+    for(const action of ['add','routing-mode','rename','usage'])assert.ok(visible.some(node=>node.props?.['data-codex-mux-action']===action),`${action} is reachable from actual native menu`);
+    assert.ok(visible.some(node=>node.props?.['data-codex-mux-account-id']==='second'),'secondary subscription is reachable');
+    assert.ok(flatten(tree).some(node=>node.type==='NativeMenuItem'&&node.props.children?.props?.id==='codex.profileDropdown.settingsPage'),'native Settings is retained');
+  }
+  const sidebarSlot='children:[qn,J,(0,$.jsx)(CodexMuxAccountMenu,{}),null,m,h]';
+  assert.ok(menu.includes(sidebarSlot),'active sidebar slot is uniquely patched');
+  vm.runInContext(extractFunction(menu.replace(sidebarSlot,'children:[qn,J,null,m,h]'),'Ri'),nativeContext);
+  nativeHooks.begin();
+  const regressionTree=expandNative(nativeContext.Ri({sidebarFooter:{profileIdentity:{displayName:'Fixture owner'}},open:true,onClose:()=>{}}));
+  assert.equal(flatten(regressionTree).filter(node=>node.type===context.CodexMuxAccountMenu).length,0,'negative control reproduces missing account manager with legacy-only patch');
   const event={preventDefault(){},stopPropagation(){}};
   find('usage').props.onSelect(event);
   assert.equal(modals.length,1);

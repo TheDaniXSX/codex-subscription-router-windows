@@ -97,6 +97,11 @@ def patch_renderer(extracted: Path, token: str, control_port: int) -> None:
     menu = replace(menu, "function Ri(e){", component + "function Ri(e){")
     menu = replace(menu, "children:[Y,Qn,ir,null,or,cr,null,null,lr,dr,Xn,fr]",
                    "children:[Y,Qn,(0,$.jsx)(CodexMuxAccountMenu,{}),ir,null,or,cr,null,null,lr,dr,Xn,fr]")
+    # The current sidebar passes sidebarFooter and returns through Pi before
+    # reaching the legacy list above. Mount the same isolated React component
+    # in its native additionalItems slot, without changing either menu layout.
+    menu = replace(menu, "children:[qn,J,null,m,h]",
+                   "children:[qn,J,(0,$.jsx)(CodexMuxAccountMenu,{}),null,m,h]")
     pending[menu_path] = f'import{{_Yt as CodexMuxQueryClient}}from"./{shared_path.name}";\n' + menu
 
     # Nonvisual APIs must be ready before the lazy menu mounts. Redemptions

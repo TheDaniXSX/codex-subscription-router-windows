@@ -70,6 +70,17 @@ class Renderer26930Tests(unittest.TestCase):
                 renderer.patch_renderer(root, "x" * 64, 55876)
             self.assertEqual(before, {name: (root / name).read_bytes() for name in FILES})
             index.write_text(original, encoding="utf8")
+            # The active sidebarFooter branch must also be version locked.
+            # Losing its additionalItems slot must not publish a legacy-only
+            # patch that passes parsing but hides account management in the UI.
+            menu = root / FILES[4]
+            original_menu = menu.read_text(encoding="utf8")
+            menu.write_text(original_menu.replace("children:[qn,J,null,m,h]", "children:[qn,J,null,h,m]", 1), encoding="utf8")
+            before = {name: (root / name).read_bytes() for name in FILES}
+            with self.assertRaisesRegex(RuntimeError, "anchor count 0"):
+                renderer.patch_renderer(root, "x" * 64, 55876)
+            self.assertEqual(before, {name: (root / name).read_bytes() for name in FILES})
+            menu.write_text(original_menu, encoding="utf8")
             renderer.patch_renderer(root, "x" * 64, 55876)
             for name in FILES[2:]:
                 # Never echo parser diagnostics containing an injected token.
