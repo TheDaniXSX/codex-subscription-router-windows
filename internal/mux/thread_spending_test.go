@@ -27,6 +27,7 @@ func threadSpendingFixture(t *testing.T) (*Multiplexer, state.Account) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(m.Close)
 	return m, second
 }
 

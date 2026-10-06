@@ -64,7 +64,7 @@ func TestLauncherIconAppliesToOwnedWindow(t *testing.T) {
 	}
 	defer func() { _, _, _ = destroyWindow.Call(window) }()
 
-	applier, err := newWindowBrandingApplier(uint32(os.Getpid()), icons, executable)
+	applier, err := newWindowBrandingApplier(uint32(os.Getpid()), icons, executable, productionAppUserModelID)
 	if err != nil {
 		t.Fatalf("create window branding applier: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestLauncherIconAppliesToOwnedWindow(t *testing.T) {
 }
 
 func TestApplyLauncherIconRejectsZeroPID(t *testing.T) {
-	if _, err := newWindowBrandingApplier(0, launcherIcons{large: 1, small: 1}, "launcher.exe"); err == nil {
+	if _, err := newWindowBrandingApplier(0, launcherIcons{large: 1, small: 1}, "launcher.exe", productionAppUserModelID); err == nil {
 		t.Fatal("expected zero process ID to be rejected")
 	}
 }

@@ -32,7 +32,7 @@ async function main() {
     return;
   }
   if (version === '26.924.22138') {
-    await require('./profile-menu-render-26924.cjs')({asar, archive, entries, initial});
+    await require('./profile-menu-render-26924.cjs')({asar, archive, entries, initial, calibrationEnabled: !process.argv.includes('--without-calibration')});
     return;
   }
   if (version === '26.917.51856') {

@@ -30,29 +30,31 @@ type RateLimitWindow struct {
 }
 
 type RateLimits struct {
+	LimitID              string           `json:"limitId,omitempty"`
 	Primary              *RateLimitWindow `json:"primary"`
 	Secondary            *RateLimitWindow `json:"secondary"`
 	RateLimitReachedType any              `json:"rateLimitReachedType"`
 }
 
 type AccountSnapshot struct {
-	observedAt      time.Time
-	ID              string          `json:"id"`
-	Label           string          `json:"label"`
-	Enabled         bool            `json:"enabled"`
-	Controller      bool            `json:"controller"`
-	Connected       bool            `json:"connected"`
-	Status          string          `json:"status"`
-	Email           string          `json:"email,omitempty"`
-	PlanType        string          `json:"planType,omitempty"`
-	PlanLabel       string          `json:"planLabel,omitempty"`
-	AuthType        string          `json:"authType,omitempty"`
-	ProfileImageURL string          `json:"profileImageUrl,omitempty"`
-	RateLimits      *RateLimits     `json:"rateLimits,omitempty"`
-	ThreadCount     int             `json:"threadCount"`
-	Error           string          `json:"error,omitempty"`
-	CreatedAt       int64           `json:"createdAt"`
-	RawAccount      json.RawMessage `json:"-"`
+	observedAt          time.Time
+	ID                  string                 `json:"id"`
+	Label               string                 `json:"label"`
+	Enabled             bool                   `json:"enabled"`
+	Controller          bool                   `json:"controller"`
+	Connected           bool                   `json:"connected"`
+	Status              string                 `json:"status"`
+	Email               string                 `json:"email,omitempty"`
+	PlanType            string                 `json:"planType,omitempty"`
+	PlanLabel           string                 `json:"planLabel,omitempty"`
+	AuthType            string                 `json:"authType,omitempty"`
+	ProfileImageURL     string                 `json:"profileImageUrl,omitempty"`
+	RateLimits          *RateLimits            `json:"rateLimits,omitempty"`
+	RateLimitsByLimitID map[string]*RateLimits `json:"rateLimitsByLimitId,omitempty"`
+	ThreadCount         int                    `json:"threadCount"`
+	Error               string                 `json:"error,omitempty"`
+	CreatedAt           int64                  `json:"createdAt"`
+	RawAccount          json.RawMessage        `json:"-"`
 }
 
 type RouteReason struct {
@@ -478,10 +480,12 @@ func (m *Multiplexer) accountSnapshotWithProfile(ctx context.Context, accountID 
 			rateResponse, rateErr := child.Request(ctx, "account/rateLimits/read", nil)
 			if rateErr == nil {
 				var rateResult struct {
-					RateLimits RateLimits `json:"rateLimits"`
+					RateLimits          RateLimits             `json:"rateLimits"`
+					RateLimitsByLimitID map[string]*RateLimits `json:"rateLimitsByLimitId"`
 				}
 				if json.Unmarshal(rateResponse.Result, &rateResult) == nil {
 					snapshot.RateLimits = &rateResult.RateLimits
+					snapshot.RateLimitsByLimitID = rateResult.RateLimitsByLimitID
 				}
 			}
 		}

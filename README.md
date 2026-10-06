@@ -248,6 +248,20 @@ qualification. External clients or scripts that bypass the router are not contro
 [transport and validation details](docs/PER-REQUEST-SPENDING.md). Installing this
 change requires closing the old router once; later mode changes do not require restarting.
 
+### Per-turn usage calibration (development, 26.924)
+
+The development build adds calibration, observed quota, estimated quota and
+API-equivalent cost controls beside **Worked for**. Details include individual
+inferences, agents, token categories, quota snapshots and shared observations.
+Every displayed quota is normalized to **Pro ×20**, including requests served
+by Plus ×1 or Pro ×5. Calibration is opt-in; estimates remain unavailable until
+there is usable selected evidence. API-equivalent USD is not a subscription bill.
+
+Use the isolated **Codex Subscription Router [DEV]** installation for the pilot.
+Its accounts, homes, profile and ports are separate from production; it requires
+its own login. See the [DEV test and rebuild guide](docs/USAGE-CALIBRATION-DEV.md).
+The feature is awaiting real-account and visual acceptance before promotion.
+
 ## Profiles, plugins, and resets
 
 **Profile statistics** begin in a combined view with overlapping account

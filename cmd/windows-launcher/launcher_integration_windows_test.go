@@ -176,6 +176,60 @@ func TestPackagedLauncherEndToEnd(t *testing.T) {
 	if information, err := os.Stat(filepath.Join(stateRoot, profileDirectoryName)); err != nil || !information.IsDir() {
 		t.Fatalf("isolated profile directory was not created: %v", err)
 	}
+
+	developmentStateRoot := filepath.Join(layout, "development state")
+	writeTestLauncherConfigurationForChannel(t, launcherConfigPath, developmentStateRoot, 61235, developmentChannel)
+	developmentSelfTest := exec.Command(launcher, selfTestArgument)
+	developmentSelfTest.Env = selfTest.Env
+	developmentSelfTestOutput, err := developmentSelfTest.CombinedOutput()
+	if err != nil {
+		t.Fatalf("development self-test failed: %v\n%s", err, developmentSelfTestOutput)
+	}
+	for _, expected := range []string{
+		"install_channel=development",
+		"app_user_model_id=" + developmentAppUserModelID,
+		"display_name=" + developmentProductName,
+		"primary_codex_home=" + filepath.Join(developmentStateRoot, developmentPrimaryHome),
+		"primary_sqlite_home=" + filepath.Join(developmentStateRoot, developmentPrimaryHome),
+	} {
+		if !strings.Contains(string(developmentSelfTestOutput), expected) {
+			t.Fatalf("development self-test omitted %q:\n%s", expected, developmentSelfTestOutput)
+		}
+	}
+
+	developmentOutputPath := filepath.Join(layout, "development-child-observation.json")
+	developmentCommand := exec.Command(launcher)
+	developmentCommand.Env = testEnvironment(os.Environ(), map[string]string{
+		"CODEX_ROUTER_TEST_OUTPUT": developmentOutputPath,
+		"CODEX_HOME":               primaryHome,
+		"CODEX_SQLITE_HOME":        primaryHome,
+		"CODEX_MUX_CONTROL_PORT":   "50000",
+	})
+	developmentChildOutput, err := developmentCommand.CombinedOutput()
+	if !errors.As(err, &exitError) || exitError.ExitCode() != 37 {
+		t.Fatalf("development launcher did not propagate child exit 37: %v\n%s", err, developmentChildOutput)
+	}
+	data, err = os.ReadFile(developmentOutputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var developmentObserved childObservation
+	if err := json.Unmarshal(data, &developmentObserved); err != nil {
+		t.Fatal(err)
+	}
+	if developmentObserved.Environment["CODEX_HOME"] != filepath.Join(developmentStateRoot, developmentPrimaryHome) ||
+		developmentObserved.Environment["CODEX_SQLITE_HOME"] != filepath.Join(developmentStateRoot, developmentPrimaryHome) ||
+		developmentObserved.Environment["CODEX_HOME"] != developmentObserved.Environment["CODEX_SQLITE_HOME"] {
+		t.Fatalf("development launch inherited production primary homes: %#v", developmentObserved.Environment)
+	}
+	for _, relative := range []string{profileDirectoryName, developmentPrimaryHome} {
+		if info, err := os.Stat(filepath.Join(developmentStateRoot, relative)); err != nil || !info.IsDir() {
+			t.Fatalf("development home %q was not isolated and created: %v", relative, err)
+		}
+	}
+	if _, err := os.Stat(primaryHome); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("development launch created or touched the inherited production home %q: %v", primaryHome, err)
+	}
 }
 
 func buildGoBinary(t *testing.T, goExecutable, output, packagePath, linkerFlags string) {
@@ -201,6 +255,58 @@ func writeTestLauncherConfiguration(t *testing.T, path, stateRoot string, contro
 		"stateRoot":     stateRoot,
 		"controlPort":   controlPort,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	appDirectory := filepath.Dir(filepath.Dir(filepath.Dir(path)))
+	writeTestBuildIdentity(t, filepath.Join(appDirectory, "codex-mux-build.json"), stateRoot, controlPort, productionChannel, "", "")
+}
+
+func writeTestLauncherConfigurationForChannel(t *testing.T, path, stateRoot string, controlPort int, channel string) {
+	t.Helper()
+	configuration := map[string]any{
+		"schemaVersion": 2,
+		"stateRoot":     stateRoot,
+		"controlPort":   controlPort,
+	}
+	primaryCodexHome, primarySQLiteHome := "", ""
+	if channel == developmentChannel {
+		primaryCodexHome = filepath.Join(stateRoot, developmentPrimaryHome)
+		primarySQLiteHome = filepath.Join(stateRoot, developmentPrimaryHome)
+		configuration["installChannel"] = channel
+		configuration["primaryCodexHome"] = primaryCodexHome
+		configuration["primarySqliteHome"] = primarySQLiteHome
+	}
+	contents, err := json.Marshal(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	appDirectory := filepath.Dir(filepath.Dir(filepath.Dir(path)))
+	writeTestBuildIdentity(t, filepath.Join(appDirectory, "codex-mux-build.json"), stateRoot, controlPort, channel, primaryCodexHome, primarySQLiteHome)
+}
+
+func writeTestBuildIdentity(t *testing.T, path, stateRoot string, controlPort int, channel, primaryCodexHome, primarySQLiteHome string) {
+	t.Helper()
+	appUserModelID, displayName := appIdentity(channel)
+	manifest := map[string]any{
+		"schemaVersion":     2,
+		"profilePath":       filepath.Join(stateRoot, profileDirectoryName),
+		"controlPort":       controlPort,
+		"installChannel":    channel,
+		"primaryCodexHome":  primaryCodexHome,
+		"primarySqliteHome": primarySQLiteHome,
+		"windowsIntegrationIsolation": map[string]string{
+			"appUserModelId": appUserModelID,
+			"displayName":    displayName,
+		},
+	}
+	contents, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}

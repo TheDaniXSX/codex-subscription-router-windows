@@ -116,9 +116,31 @@ Explorer checks. Static fixtures do not satisfy the live items below.
       handle count, and recovery after child failure without exposing account
       data.
 
+## Additional qualification for usage calibration on 26.924
+
+The DEV feature has its own [test guide](USAGE-CALIBRATION-DEV.md). Keep these
+manual checks open until a real account is used in the isolated development app:
+
+- [ ] Four accessible controls appear immediately after `Worked for`, wrap on
+      narrow windows, and stay attached to the correct conversation and turn.
+- [ ] Parent, nested agents, continuations and compaction contribute once;
+      inspect native identities and report missing coverage.
+- [ ] ×1/×5/×20 readings all display Pro ×20 equivalents; the short and weekly
+      windows stay separate, and API USD is unaffected by that conversion.
+- [ ] Known overlap has `*`; one shared delta trains once only after all members
+      are selected. Unobserved external traffic is excluded by the user.
+- [ ] Rounded zero readings carry their tokens into the next observation;
+      membership changes clear selection, and reopening DEV retains evidence.
+- [ ] API subtotal/missing usage and the uncalibrated estimate are clearly
+      distinguished from a complete calculated cost or a genuine zero.
+- [ ] DEV and PROD run simultaneously with private homes, profile, listeners,
+      tokens and visual identity; DEV rebuild/rollback leaves PROD usable.
+- [ ] A chronological real-usage pilot measures estimator error before making
+      accuracy claims. Complete the 5,000-root performance exercise separately.
+
 ## Expected limitations for a source-only 0.2.0 release
 
-The following limitations may remain only when the README and release notes
+ The following limitations may remain only when the README and release notes
 state them clearly and the reviewer accepts them:
 
 - A future official Store update requires a separately reviewed patch profile.

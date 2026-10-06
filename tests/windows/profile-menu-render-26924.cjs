@@ -40,7 +40,7 @@ function makeHooks(initialValues) {
   };
 }
 
-module.exports = async function verify26924({asar, archive, entries, initial}) {
+module.exports = async function verify26924({asar, archive, entries, initial, calibrationEnabled = true}) {
   const read = name => asar.extractFile(archive, name.replace(/^\//, '').split('/').join(path.sep)).toString();
   const menuPath = entries.find(p => /\/profile-dropdown-items-[a-f0-9]+\.js$/.test(p));
   assert.ok(menuPath, '26.924 profile dropdown bundle exists');
@@ -234,5 +234,13 @@ module.exports = async function verify26924({asar, archive, entries, initial}) {
   assert.ok(thread.includes('const CodexMuxThreadReact=cM;'), 'thread hooks use the 26.924 React binding');
   assert.ok(thread.includes('globalThis.__codexMuxRendererUiReady.then'), 'thread waits for lazy SSE helpers if it mounts first');
   assert.ok(thread.includes('children:[j,b,M,N,(0,SD.jsx)(CodexMuxThreadSubscription,{}),A,I]'), 'attribution is placed in the native local-thread summary');
+  if (calibrationEnabled) {
+    await require('./turn-usage-render-26924.cjs')({read, entries});
+  } else {
+    for (const entry of entries.filter(p => /\/(conversation-blocks|collapsed-turn-disclosure)-[^/]+\.js$/.test(p))) {
+      assert.ok(!read(entry).includes('CodexMuxTurnUsage'), 'production shared app has no calibration footer controls');
+      assert.ok(!read(entry).includes('/v1/usage'), 'production footer cannot call calibration routes');
+    }
+  }
   console.log('PASS: 26.924 lazy menu Rename, Auto/account selector, native usage modal, account-scoped reset query/redemption, profile refresh, plugin scope and thread helper readiness.');
 };

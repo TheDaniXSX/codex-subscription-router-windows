@@ -1,7 +1,6 @@
 package spend
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/subtle"
@@ -9,12 +8,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/TheDaniXSX/codex-subscription-router-windows/internal/usage"
 )
 
 // Full-context requests include base64 images and tool results accumulated over
@@ -34,6 +37,10 @@ type Gateway struct {
 	RoundTrip http.RoundTripper
 	Upstream  *url.URL
 	Observe   func(Record)
+	// Begin runs immediately before dispatch, after a stable request identity
+	// and selected subscription have been attached to the record. Telemetry
+	// callbacks must not affect inference delivery.
+	Begin func(context.Context, *Record)
 	// Accepted fires once after upstream accepts the selected identity, before
 	// reading its body. Observe still reports the terminal outcome separately.
 	Accepted func(Record)
@@ -42,13 +49,14 @@ type Gateway struct {
 type Credentials struct{ Bearer, AccountID string }
 type Record struct {
 	Decision
-	Status         int    `json:"status"`
-	Outcome        string `json:"outcome"`
-	DurationMillis int64  `json:"durationMillis"`
-	ThreadID       string `json:"threadId,omitempty"`
-	TurnID         string `json:"turnId,omitempty"`
-	Subagent       bool   `json:"subagent"`
-	FailureKind    string `json:"failureKind,omitempty"`
+	Status         int           `json:"status"`
+	Outcome        string        `json:"outcome"`
+	DurationMillis int64         `json:"durationMillis"`
+	ThreadID       string        `json:"threadId,omitempty"`
+	TurnID         string        `json:"turnId,omitempty"`
+	Subagent       bool          `json:"subagent"`
+	FailureKind    string        `json:"failureKind,omitempty"`
+	Telemetry      *usage.Record `json:"telemetry,omitempty"`
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -141,15 +149,18 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	record := Record{Decision: decision, Outcome: "not-sent"}
 	var metadata map[string]string
 	_ = json.Unmarshal(envelope["client_metadata"], &metadata)
-	if len(metadata["thread_id"]) <= 64 {
-		record.ThreadID = metadata["thread_id"]
-	}
+	record.ThreadID = requestThreadID(r, metadata)
 	if len(metadata["turn_id"]) <= 64 {
 		record.TurnID = metadata["turn_id"]
 	}
-	record.Subagent = metadata["x-openai-subagent"] != ""
+	record.Subagent = isSubagentRequest(r, metadata)
 	defer func() {
-		record.DurationMillis = time.Since(started).Milliseconds()
+		finished := time.Now()
+		record.DurationMillis = finished.Sub(started).Milliseconds()
+		if record.Telemetry != nil {
+			record.Telemetry.FinishedAt = finished.UTC()
+			record.Telemetry.Outcome = record.Outcome
+		}
 		if g.Observe != nil {
 			g.Observe(record)
 		}
@@ -179,6 +190,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			upstream.Header.Set(key, value)
 		}
 	}
+	record.Telemetry = newUsageRecord(envelope, r, decision, started)
+	if record.Telemetry != nil {
+		record.Telemetry.StartedAt = time.Now().UTC()
+		invokeBegin(g.Begin, r.Context(), &record)
+	}
 	response, err := g.RoundTrip.RoundTrip(upstream)
 	if err != nil {
 		record.Outcome = "delivery-unknown"
@@ -190,6 +206,14 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	record.Status = response.StatusCode
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		record.Outcome = "upstream-rejected"
+		// A bounded JSON rejection may still carry upstream-reported usage. Do
+		// not relay or persist its content; only extract typed telemetry fields.
+		if record.Telemetry != nil && isJSONContentType(response.Header.Get("Content-Type")) {
+			data, readErr := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
+			if readErr == nil && len(data) <= 1<<20 && json.Valid(data) {
+				captureJSONResponseUsage(record.Telemetry, data, "responses")
+			}
+		}
 		// Never redirect or retry onto another identity. Do not expose upstream
 		// error bodies, which may echo sensitive request data or credentials.
 		gatewayError(w, 502, fmt.Sprintf("selected subscription returned HTTP %d; no automatic retry", response.StatusCode))
@@ -197,77 +221,68 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if g.Accepted != nil {
 		accepted := record
+		accepted.Telemetry = cloneUsageRecord(record.Telemetry)
 		accepted.Outcome = "accepted"
+		if accepted.Telemetry != nil {
+			accepted.Telemetry.Outcome = accepted.Outcome
+		}
 		g.Accepted(accepted)
 	}
 	w.Header().Set("Content-Type", response.Header.Get("Content-Type"))
 	w.Header().Set("X-Router-Account", decision.AccountID)
 	w.Header().Set("X-Router-Decision", strconv.FormatUint(decision.Sequence, 10))
-	if compact {
+	if compact || isJSONContentType(response.Header.Get("Content-Type")) {
 		data, readErr := io.ReadAll(io.LimitReader(response.Body, (32<<20)+1))
 		if readErr != nil || len(data) > 32<<20 || !json.Valid(data) {
-			record.Outcome = "invalid-compaction-response"
-			gatewayError(w, 502, "invalid compaction response; not retried")
+			operation := "responses"
+			if compact {
+				operation = "compaction"
+			}
+			record.Outcome = "invalid-" + operation + "-response"
+			gatewayError(w, 502, "invalid "+operation+" response; not retried")
 			return
 		}
+		if compact {
+			captureCompactionUsage(record.Telemetry, data)
+		} else {
+			captureJSONResponseUsage(record.Telemetry, data, "responses")
+		}
+		record.Outcome = jsonResponseOutcome(data)
+		w.WriteHeader(response.StatusCode)
 		_, writeErr := w.Write(data)
 		if writeErr != nil {
 			record.Outcome = "client-disconnected"
-		} else {
-			record.Outcome = "completed"
 		}
 		return
 	}
 	w.WriteHeader(response.StatusCode)
-	controller := http.NewResponseController(w)
-	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(make([]byte, 32*1024), 32<<20)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		terminal := ""
-		if bytes.HasPrefix(line, []byte("data:")) {
-			var event struct {
-				Type string `json:"type"`
-			}
-			if json.Unmarshal(bytes.TrimSpace(line[5:]), &event) == nil {
-				switch event.Type {
-				case "response.completed":
-					terminal = "completed"
-				case "response.failed", "response.incomplete", "error":
-					terminal = "upstream-failed"
-				}
-			}
-		}
-		if _, err = w.Write(append(append([]byte(nil), line...), '\n')); err != nil {
-			record.Outcome = "client-disconnected"
-			return
-		}
-		if terminal != "" {
-			if _, err = w.Write([]byte("\n")); err != nil {
-				record.Outcome = "client-disconnected"
-				record.FailureKind = transportFailureKind(err)
-				return
-			}
-			if err = controller.Flush(); err != nil {
-				record.Outcome = "client-disconnected"
-				record.FailureKind = transportFailureKind(err)
-				return
-			}
-			record.Outcome = terminal
-			return
-		}
-		if err = controller.Flush(); err != nil {
-			record.Outcome = "client-disconnected"
-			record.FailureKind = transportFailureKind(err)
-			return
-		}
+	record.Outcome, record.FailureKind = forwardResponsesSSE(w, response.Body, record.Telemetry)
+}
+
+func jsonResponseOutcome(data []byte) string {
+	var response struct {
+		Status string          `json:"status"`
+		Error  json.RawMessage `json:"error"`
 	}
-	record.Outcome = "stream-interrupted"
-	if err := scanner.Err(); err != nil {
-		record.FailureKind = "stream-" + transportFailureKind(err)
-	} else {
-		record.FailureKind = "stream-eof-before-terminal"
+	if json.Unmarshal(data, &response) != nil {
+		return "upstream-failed"
 	}
+	if len(response.Error) > 0 && string(response.Error) != "null" {
+		return "upstream-failed"
+	}
+	switch response.Status {
+	case "failed", "incomplete", "cancelled":
+		return "upstream-failed"
+	case "in_progress", "queued":
+		return "stream-interrupted"
+	default:
+		return "completed"
+	}
+}
+
+func isJSONContentType(value string) bool {
+	mediaType, _, err := mime.ParseMediaType(value)
+	return err == nil && (mediaType == "application/json" || strings.HasSuffix(mediaType, "+json"))
 }
 
 // Only bounded categories are exposed; raw network errors can contain secrets.
@@ -284,7 +299,7 @@ func transportFailureKind(err error) string {
 	if errors.Is(err, syscall.EPIPE) {
 		return "broken-pipe"
 	}
-	if errors.Is(err, bufio.ErrTooLong) {
+	if errors.Is(err, errSSEEventTooLarge) {
 		return "event-too-large"
 	}
 	if errors.Is(err, context.Canceled) {

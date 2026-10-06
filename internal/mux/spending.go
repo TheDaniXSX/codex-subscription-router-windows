@@ -40,7 +40,7 @@ func (m *Multiplexer) startSpendGateway() error {
 	transport.ResponseHeaderTimeout = spendResponseHeaderTimeout
 	transport.MaxConnsPerHost = 32
 	transport.MaxIdleConnsPerHost = 16
-	g := &spend.Gateway{Policy: m.spendPolicy, Token: m.spendToken, Upstream: u, RoundTrip: transport, Candidates: m.spendCandidates, Credentials: m.spendCredentials, Observe: m.recordSpend, Accepted: m.acceptThreadSpend}
+	g := &spend.Gateway{Policy: m.spendPolicy, Token: m.spendToken, Upstream: u, RoundTrip: transport, Candidates: m.spendCandidates, Credentials: m.spendCredentials, Begin: m.beginUsage, Observe: m.recordSpend, Accepted: m.acceptThreadSpend}
 	if m.spendTransport != nil {
 		g.RoundTrip = m.spendTransport
 	}
@@ -241,6 +241,7 @@ func (m *Multiplexer) bindSpendProvider(method string, params json.RawMessage) j
 }
 
 func (m *Multiplexer) recordSpend(record spend.Record) {
+	m.finishUsage(record)
 	m.spendRecordsMu.Lock()
 	m.spendRecords = append(m.spendRecords, record)
 	if len(m.spendRecords) > 100 {

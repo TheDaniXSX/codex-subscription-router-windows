@@ -45,8 +45,14 @@ func run() error {
 		return err
 	}
 	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "--router-broker" {
+		return runSharedBroker(realExecutable, args[1:])
+	}
 	if !isInteractiveAppServer(args) || !hasRouterContext(os.LookupEnv) || isComputerUseAuxiliary(args) {
 		return passthrough(realExecutable, args)
+	}
+	if os.Getenv("CODEX_MUX_SHARED_ROOT") != "" {
+		return runSharedProxy(realExecutable, args)
 	}
 
 	home, err := os.UserHomeDir()
