@@ -22,6 +22,10 @@ upstream between checking and sending. No automatic cross-account retry is made.
 ## Transport and privacy
 
 - Native provider overrides disable WebSocket deltas and request/stream retries.
+- Composer prediction forks (`thread/fork` with `experimentalPredictionMode`) are
+  not rebound: upstream rejects any override there, and the fork inherits the
+  provider its source history's `thread/resume` already bound. The prediction
+  turn then spends like any other inference.
 - Full input, including opaque encrypted reasoning, is preserved byte-for-byte.
 - Inference and compaction requests accept up to 128 MiB of uncompressed JSON,
   including base64 images in accumulated history. The former 32 MiB cap could

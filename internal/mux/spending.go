@@ -235,6 +235,11 @@ func (m *Multiplexer) bindSpendProvider(method string, params json.RawMessage) j
 	} else if json.Unmarshal(params, &p) != nil || p == nil {
 		return params
 	}
+	// Composer prediction forks reject every override. They inherit the
+	// provider of the source history, which its thread/resume already bound.
+	if method == "thread/fork" && p["experimentalPredictionMode"] == true {
+		return params
+	}
 	p["modelProvider"] = spendProvider
 	encoded, _ := json.Marshal(p)
 	return encoded

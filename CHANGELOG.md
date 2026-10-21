@@ -5,6 +5,67 @@ this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Codex 26.1013
+
+- Add an exact profile for Windows Codex `26.1013.4894.0` (ASAR
+  `26.1013.40934`, build `20770`, CLI `0.163.0-alpha.10.2`; original ASAR
+  SHA-256 `bbec1d64e135b718a154b31655bb8ad9a39472bac1b2cabba991a9d97a339dd8`).
+  `windows_native_261013.py` and `windows_renderer_261013.py` follow the
+  26.1007 modules with the new minifier bindings.
+- The desktop log root moved from `bootstrap-*.js` into a new
+  `file-based-logger-*.js` chunk, and `AppServerRequestClient` moved from
+  `app-shared` into `app-initial`; both anchors follow their code.
+- Support composer predictions ("Press Tab to accept"). Two changes ship
+  together. First, the mux leaves prediction forks (`experimentalPredictionMode`)
+  unbound, because upstream rejects any override there. Second, the 26.1013
+  prediction eligibility check also accepts the router's `codex_router_spend`
+  provider. The statsig gate, setting, `/wham/predictions/config`, sample rate,
+  safety policy and app-server version check (`0.162.0-alpha.20` or later) stay
+  upstream.
+- OpenAI signs this build with a new Authenticode certificate (thumbprint
+  `8C1BBD222297A3669B63F95B42710343619559BB`). The earlier `26.1013.3656.0`
+  Store build (ASAR `26.1013.31256`) had identical native bundles and was
+  replaced within days, so it has no profile of its own.
+- Computer Use runtime `0.0.30/20261014203459-0849368674e2` (2,369 files /
+  252,264,432 bytes; tree SHA-256
+  `fa0efd31b8fc058004db0a30bbc0e94825e45a8f1b86578a50e3cb546a875299`). Static
+  payload evidence only.
+
+### Codex 26.1007
+
+- Add an exact profile for Windows Codex `26.1007.2314.0` (ASAR
+  `26.1007.21434`, build `13901`, CLI `0.162.0-alpha.17.2`; original ASAR
+  SHA-256 `c5fdef328cfa2ad9095786f9c3a7aaa447e68834d31299d6ef2592da02029038`).
+  `windows_native_261007.py` and `windows_renderer_261007.py` follow the
+  26.1002 modules with the new minifier bindings; the feature set is unchanged.
+- Native-host registration moved back from `bootstrap-*.js` into one of four
+  `src-*.js` chunks, which the adapter selects by its exact registry anchor.
+  The worker log path now keeps a different alias from bootstrap, so each
+  bundle has its own anchor.
+- The reset-credit query and mutation hooks are now compiled with a memo cache.
+  The scoped replacements stay uncached because the selected account can change
+  between renders.
+- OpenAI signs this build with a new Authenticode certificate (thumbprint
+  `0C6C3CA94B5A2DDA98357A1176470AB7B85ADF8F`).
+- Computer Use runtime `0.0.29/20261005054403-144090e2ddcb` (2,365 files /
+  251,250,501 bytes; tree SHA-256
+  `e821e9c05ac44938ee217d6c58e122fc1de6c749f1955163a18dc0ae1169463a`). Static
+  payload evidence only.
+
+### Codex 26.1002
+
+- Add an exact profile for Windows Codex `26.1002.7124.0` (ASAR
+  `26.1002.52244`, build `13536`, CLI `0.162.0-alpha.2`; original ASAR
+  SHA-256 `76fe7078248c00e4e03dd2177a4275ec9ce158a9dd43452a4f0427d39a4ed012`).
+  `windows_native_261002.py` and `windows_renderer_261002.py` follow the 26.930
+  modules with the new minifier bindings; the feature set is unchanged.
+- In the thread panel, the section that followed background agents in 26.930 is
+  gone, so the last-request section now sits directly after background agents.
+- Computer Use moves to `@oai/cua` `0.2.6`, runtime
+  `0.0.29/20261003001300-807782c586fc` (2,365 files / 251,216,888 bytes; tree
+  SHA-256 `9b74f2e42381bd111954a75e58968e6034c92931a82e12a3f42791ffd46af9ac`).
+  Static payload evidence only.
+
 ### Single-app recovery and Codex 26.930
 
 - Restore the `c4eb2ea` feature set and adapt the exact installed Windows source

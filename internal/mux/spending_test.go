@@ -50,6 +50,24 @@ func TestSpendingBindsOldAndNewHistories(t *testing.T) {
 	}
 }
 
+func TestSpendingLeavesPredictionForksInherited(t *testing.T) {
+	m := &Multiplexer{requestSpending: true}
+	params := json.RawMessage(`{"threadId":"source","experimentalPredictionMode":true,"ephemeral":true,"excludeTurns":true,"threadSource":"composer_predictions"}`)
+	if got := m.bindSpendProvider("thread/fork", params); string(got) != string(params) {
+		t.Fatal(string(got))
+	}
+	for _, method := range []string{"thread/fork", "thread/resume"} {
+		var bound map[string]any
+		if err := json.Unmarshal(m.bindSpendProvider(method, json.RawMessage(`{"threadId":"source","experimentalPredictionMode":false}`)), &bound); err != nil || bound["modelProvider"] != spendProvider {
+			t.Fatal(method, bound, err)
+		}
+	}
+	var resumed map[string]any
+	if err := json.Unmarshal(m.bindSpendProvider("thread/resume", json.RawMessage(`{"threadId":"source","experimentalPredictionMode":true}`)), &resumed); err != nil || resumed["modelProvider"] != spendProvider {
+		t.Fatal(resumed, err)
+	}
+}
+
 func TestSpendingConfigurationDeterministicAndPrivate(t *testing.T) {
 	m := &Multiplexer{requestSpending: true, spendToken: "new-secret", spendURL: "http://127.0.0.1:12345/v1", realArgs: []string{"app-server"}, environment: []string{"PATH=kept", "codex_spend_gateway_token=stale", "CODEX_SPEND_GATEWAY_TOKEN=other"}}
 	if !reflect.DeepEqual(m.spendEnvironment(), []string{"PATH=kept", "CODEX_SPEND_GATEWAY_TOKEN=new-secret"}) {
